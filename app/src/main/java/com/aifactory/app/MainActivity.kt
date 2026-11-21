@@ -318,6 +318,21 @@ private fun ProjectsPage() {
     var editPath by remember { mutableStateOf("") }
     var editContent by remember { mutableStateOf("") }
     var lastCheckpoint by remember { mutableStateOf("") }
+    val projectTreePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            runCatching { workspace.importTree(uri, projectName.ifBlank { "Imported Project" }) }
+                .onSuccess {
+                    projectName = ""
+                    refresh()
+                    selectedId = it.id
+                    scan = workspace.scan(it.id)
+                    output = "工程目录已复制到 AIFactory 私有工作区。"
+                }
+                .onFailure { output = "导入失败：" + it.message }
+        }
+    }
 
     fun refresh() {
         projects = workspace.listProjects()
@@ -345,6 +360,11 @@ private fun ProjectsPage() {
                     .onSuccess { projectName = ""; refresh(); selectedId = it.id; scan = workspace.scan(it.id); output = "项目已创建。" }
                     .onFailure { output = "创建失败：" + it.message }
             }) { Text("创建") }
+        }
+        OutlinedButton(onClick = { projectTreePicker.launch(null) }, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.FolderOpen, null)
+            Spacer(Modifier.width(6.dp))
+            Text("从 Android 文件选择器导入整个工程目录")
         }
         if (projects.isEmpty()) {
             Card(Modifier.fillMaxWidth()) {
