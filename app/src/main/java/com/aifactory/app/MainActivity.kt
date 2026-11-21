@@ -440,6 +440,7 @@ private fun ProjectsPage() {
                                 Button(onClick = {
                                     editPath = proposal.path
                                     editContent = proposal.content
+                                    editProjectId = current.project.id
                                     pendingProposalId = proposal.id
                                     output = "已载入完整建议内容。请在下方编辑器检查全文，再点击「保存并创建检查点」应用。"
                                 }) { Text("载入全文审阅") }
