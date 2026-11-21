@@ -10,8 +10,8 @@ import kotlinx.coroutines.withContext
 
 /**
  * OpenAI-compatible tool-call loop for safe project inspection.
- * Source writes are intentionally not exposed as tools; build/test require
- * a separate explicit user opt-in and still use ProjectCommandRunner's allowlist.
+ * Source changes are proposals only and require an explicit editor save.
+ * Build/test require a separate user opt-in and use ProjectCommandRunner's allowlist.
  */
 class AgentOrchestrator(private val context: Context) {
     private val workspace = EngineeringWorkspace(context)
@@ -161,7 +161,8 @@ class AgentOrchestrator(private val context: Context) {
 
     private fun toolDefinitions(): JSONArray {
         val tools = JSONArray()
-        tools.put(tool("list_projects", "列出 AIFactory 私有工作区中的项目。", JSONObject()))
+        tools.put(tool("list_projects", "列出 AIFactory 私有工作区中的项目。", JSONObject()
+            .put("type", "object").put("properties", JSONObject()).put("additionalProperties", false)))
         tools.put(tool("scan_project", "扫描项目结构并识别构建和测试入口。", schema(
             "project_id", "string", "项目 ID", true
         )))
