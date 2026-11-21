@@ -37,7 +37,11 @@ class PendingChangeStore(context: Context) {
         require(content.toByteArray(Charsets.UTF_8).size <= 2 * 1024 * 1024) { "单文件建议不能超过 2 MB" }
         require(reason.length <= 1000) { "修改说明过长" }
         val current = list().toMutableList()
-        require(current.size < 30) { "待审批修改已达到 30 项上限" }
+        require(current.size < 20) { "待审批修改已达到 20 项上限" }
+        val totalBytes = current.sumOf { it.content.toByteArray(Charsets.UTF_8).size.toLong() }
+        require(totalBytes + content.toByteArray(Charsets.UTF_8).size <= 5L * 1024 * 1024) {
+            "待审批修改总量不能超过 5 MB"
+        }
         val item = PendingFileChange(UUID.randomUUID().toString(), projectId, path,
             content, reason, System.currentTimeMillis())
         current += item
