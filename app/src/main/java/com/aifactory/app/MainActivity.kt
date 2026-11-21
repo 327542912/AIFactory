@@ -141,6 +141,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
                 }
                 when (page) {
                     Page.CHAT -> ChatPage(
+                        context = context,
                         attachments = chatAttachments,
                         onPickFiles = launchFilePicker,
                         onRemoveAttachment = { chatAttachments.remove(it) }
@@ -172,6 +173,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
 
 @Composable
 private fun ChatPage(
+    context: android.content.Context,
     attachments: List<FileRecord>,
     onPickFiles: () -> Unit,
     onRemoveAttachment: (FileRecord) -> Unit
@@ -250,7 +252,7 @@ private fun ChatPage(
                         }
                     }
                     Text(
-                        "当前版本保存附件引用和名称，尚未解析文件内容发送给模型。",
+                        "发送时会读取受限大小的文本/源码附件并随消息发给模型；图片、PDF、Office 和二进制文件暂不解析。",
                         color = Muted, fontSize = 10.sp
                     )
                 }
@@ -261,18 +263,30 @@ private fun ChatPage(
                     OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("描述你想开发的软件…") }, shape = RoundedCornerShape(18.dp), maxLines = 5)
                     Spacer(Modifier.width(8.dp))
                     IconButton(enabled = input.isNotBlank() && !busy, onClick = {
-                        val names = attachments.map { it.name }
-                        val prompt = input.trim() +
-                            if (names.isNotEmpty()) "\\n\\n附件文件：\\n" + names.joinToString("\\n") else ""
+                        val userText = input.trim()
+                        val selectedAttachments = attachments.toList()
                         input = ""
-                        messages.add(ChatMessage("user", prompt))
-                        attachments.toList().forEach { onRemoveAttachment(it) }
-                        if (apiKey.isBlank()) messages.add(ChatMessage("assistant", "请先打开模型设置，填写 API 地址、模型名称和 API Key。"))
-                        else {
-                            busy = true
-                            scope.launch {
-                                val answer = withContext(Dispatchers.IO) { requestChat(baseUrl, model, apiKey, messages.toList()) }
-                                messages.add(ChatMessage("assistant", answer)); busy = false
+                        busy = true
+                        scope.launch {
+                            val attachmentText = withContext(Dispatchers.IO) {
+                                selectedAttachments.take(10).map { file ->
+                                    val body = readTextAttachment(context, file)
+                                    "===== ${file.name} =====\\n$body"
+                                }.joinToString("\\n\\n").take(500 * 1024)
+                            }
+                            val prompt = userText +
+                                if (attachmentText.isNotBlank()) "\\n\\n以下是用户选中的文本/源码附件内容：\\n$attachmentText" else ""
+                            messages.add(ChatMessage("user", prompt))
+                            selectedAttachments.forEach { onRemoveAttachment(it) }
+                            if (apiKey.isBlank()) {
+                                messages.add(ChatMessage("assistant", "请先打开模型设置，填写 API 地址、模型名称和 API Key。"))
+                                busy = false
+                            } else {
+                                val answer = withContext(Dispatchers.IO) {
+                                    requestChat(baseUrl, model, apiKey, messages.toList())
+                                }
+                                messages.add(ChatMessage("assistant", answer))
+                                busy = false
                             }
                         }
                     }) { Icon(Icons.Default.ArrowUpward, "发送", tint = Accent) }
