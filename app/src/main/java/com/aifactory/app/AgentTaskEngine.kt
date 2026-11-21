@@ -65,12 +65,21 @@ class AgentTaskEngine(context: Context) {
     }
 
     fun nextReady(): List<AgentTask> = synchronized(lock) {
-        val all = tasks()
+        val all = tasks().toMutableList()
         val byId = all.associateBy { it.id }
-        all.filter { task ->
+        val ready = all.indices.filter { i ->
+            val task = all[i]
             task.status == AgentTaskStatus.PLANNED &&
                 task.dependsOn.all { byId[it]?.status == AgentTaskStatus.SUCCEEDED }
-        }.map { it.copy(status = AgentTaskStatus.READY) }
+        }
+        ready.forEach { i ->
+            all[i] = all[i].copy(status = AgentTaskStatus.READY, updatedAt = System.currentTimeMillis())
+        }
+        if (ready.isNotEmpty()) {
+            persist(all)
+            appendEvent("TASKS_READY", JSONObject().put("count", ready.size))
+        }
+        ready.map { all[it] }
     }
 
     fun transition(id: String, next: AgentTaskStatus, result: String = ""): AgentTask = synchronized(lock) {
@@ -117,7 +126,8 @@ class AgentTaskEngine(context: Context) {
             if (it.status in setOf(AgentTaskStatus.PLANNED, AgentTaskStatus.READY, AgentTaskStatus.WAITING_APPROVAL, AgentTaskStatus.BLOCKED))
                 it.copy(status = AgentTaskStatus.CANCELLED, updatedAt = System.currentTimeMillis()) else it
         }
-        val n = all.count { it.status == AgentTaskStatus.CANCELLED }
+        val n = all.count { it.status == AgentTaskStatus.CANCELLED } -
+            tasks().count { it.status == AgentTaskStatus.CANCELLED }
         persist(all)
         appendEvent("PENDING_CANCELLED", JSONObject().put("count", n))
         n
