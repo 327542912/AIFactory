@@ -25,6 +25,8 @@ class AgentOrchestrator(private val context: Context) {
         allowBuildTest: Boolean
     ): String {
         val messages = JSONArray()
+        messages.put(JSONObject().put("role", "system").put("content",
+            "你是 AIFactory 工程代理。先列出项目，再扫描并按需读取源码。只能通过已注册工具检查项目；不要声称执行过未执行的操作。不要猜测项目 ID。未经用户明确授权不得构建或测试。当前没有源码写入工具，不得声称已经修改文件；如需修改，请给出精确文件路径和完整建议内容，等待用户在工作区编辑器中应用。"))
         history.forEach { item ->
             messages.put(JSONObject().put("role", item.role).put("content", item.text))
         }
