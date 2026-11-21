@@ -291,14 +291,17 @@ jobs:
           RC=$?
           set -e
           echo "build-bootstraps.sh rc=$RC"
-          ZIP=output/bootstrap-aarch64.zip
-          if [ ! -f "$ZIP" ]; then
+          # 注意：TERMUX_BOOTSTRAP_OUTPUT_DIRECTORY 指向仓库根（不是 output/），
+          # 所以 zip 落在 termux-packages/bootstrap-aarch64.zip。别写死路径。
+          ZIP=$(find . -maxdepth 3 -name 'bootstrap-aarch64.zip' -type f | head -1)
+          if [ -z "$ZIP" ]; then
             echo "::error::bootstrap-aarch64.zip 不存在，构建真失败 (rc=$RC)"
+            ls -la | head -20
             ls -la output 2>/dev/null | head -20 || true
             exit 1
           fi
           if [ "$RC" -ne 0 ]; then
-            echo "::warning::rc=$RC，但 zip 已生成，按成功处理"
+            echo "::warning::rc=$RC（上游 trap 假失败），但 $ZIP 已生成，按成功处理"
           fi
           ls -lh "$ZIP"
           unzip -t "$ZIP" | tail -2
@@ -343,6 +346,7 @@ jobs:
           rm -rf pfxprobe
 
       - name: Upload runtime artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: aifactory-runtime-aarch64
@@ -351,10 +355,12 @@ jobs:
           retention-days: 14
 
       - name: Publish release (stable download URL)
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG=runtime-latest
+          test -s termux-packages/bootstrap-aarch64.zip || { echo "no bootstrap zip, skip release"; exit 0; }
           sha256sum termux-packages/bootstrap-aarch64.zip | cut -d' ' -f1 > bootstrap-aarch64.zip.sha256
           gh release delete "$TAG" --cleanup-tag -y --repo "$GITHUB_REPOSITORY" || true
           gh release create "$TAG" \
