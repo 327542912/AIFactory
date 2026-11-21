@@ -11,11 +11,10 @@ android {
         applicationId = "com.aifactory.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        versionCode = 2
         versionName = "0.1.0"
     }
     buildTypes {
-        debug { applicationIdSuffix = ".debug" }
         release { isMinifyEnabled = false }
     }
     compileOptions {
