@@ -338,6 +338,7 @@ private fun ProjectsPage() {
     var editPath by remember { mutableStateOf("") }
     var editContent by remember { mutableStateOf("") }
     var lastCheckpoint by remember { mutableStateOf("") }
+    var pendingProposalId by remember { mutableStateOf("") }
     var pendingChanges by remember { mutableStateOf(pendingStore.list()) }
     fun refresh() {
         projects = workspace.listProjects()
@@ -435,15 +436,11 @@ private fun ProjectsPage() {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = {
-                                    runCatching {
-                                        workspace.writeFile(current.project.id, proposal.path, proposal.content)
-                                    }.onSuccess { checkpointId ->
-                                        pendingStore.remove(proposal.id)
-                                        lastCheckpoint = checkpointId
-                                        refresh()
-                                        output = "已由用户批准并应用修改。检查点：$checkpointId"
-                                    }.onFailure { output = "应用失败：" + it.message }
-                                }) { Text("审阅后应用") }
+                                    editPath = proposal.path
+                                    editContent = proposal.content
+                                    pendingProposalId = proposal.id
+                                    output = "已载入完整建议内容。请在下方编辑器检查全文，再点击「保存并创建检查点」应用。"
+                                }) { Text("载入全文审阅") }
                                 OutlinedButton(onClick = {
                                     pendingStore.remove(proposal.id)
                                     refresh()
@@ -487,7 +484,15 @@ private fun ProjectsPage() {
                 }) { Text("读取") }
                 Button(enabled = editPath.isNotBlank(), onClick = {
                     runCatching { workspace.writeFile(current.project.id, editPath, editContent) }
-                        .onSuccess { lastCheckpoint = it; refresh(); output = "保存成功。检查点：$it" }
+                        .onSuccess {
+                            lastCheckpoint = it
+                            if (pendingProposalId.isNotBlank()) {
+                                pendingStore.remove(pendingProposalId)
+                                pendingProposalId = ""
+                            }
+                            refresh()
+                            output = "保存成功。检查点：$it"
+                        }
                         .onFailure { output = "保存失败：" + it.message }
                 }) { Text("保存并创建检查点") }
                 OutlinedButton(enabled = lastCheckpoint.isNotBlank(), onClick = {
