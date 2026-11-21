@@ -305,16 +305,116 @@ private fun requestChat(base: String, model: String, key: String, history: List<
 
 @Composable
 private fun ProjectsPage() {
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Text("项目工作区", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("AIFactory 将在 Termux 中管理独立工作区，不会修改 EdgeCluster。", color = Muted)
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.FolderOpen, null, tint = Accent); Spacer(Modifier.width(12.dp))
-                Column { Text("~/AIFactory-workspace", fontWeight = FontWeight.SemiBold); Text("计划中的默认工作区", color = Muted, fontSize = 11.sp) }
+    val context = LocalContext.current
+    val workspace = remember(context) { EngineeringWorkspace(context) }
+    val runner = remember { ProjectCommandRunner() }
+    val scope = rememberCoroutineScope()
+    var projects by remember { mutableStateOf(workspace.listProjects()) }
+    var projectName by remember { mutableStateOf("") }
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    var scan by remember { mutableStateOf<ProjectScan?>(null) }
+    var output by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        projects = workspace.listProjects()
+        selectedId?.let { id ->
+            scan = runCatching { workspace.scan(id) }.getOrNull()
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text("工程工作区", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text("项目保存在 AIFactory 私有目录。文件写入会先建立本地检查点。", color = Muted, fontSize = 12.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                projectName, { projectName = it },
+                modifier = Modifier.weight(1f),
+                label = { Text("新项目名称") },
+                singleLine = true
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(enabled = projectName.isNotBlank(), onClick = {
+                runCatching { workspace.createProject(projectName) }
+                    .onSuccess { projectName = ""; refresh(); selectedId = it.id; scan = workspace.scan(it.id); output = "项目已创建。" }
+                    .onFailure { output = "创建失败：" + it.message }
+            }) { Text("创建") }
+        }
+        if (projects.isEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Text("尚无项目。创建项目后可查看工程结构和识别构建系统。", Modifier.padding(16.dp), color = Muted)
+            }
+        } else {
+            Text("项目列表 · ${projects.size}", fontWeight = FontWeight.SemiBold)
+            LazyColumn(Modifier.weight(if (scan == null) 1f else 0.7f, fill = true),
+                verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(projects, key = { it.id }) { project ->
+                    Card(onClick = {
+                        selectedId = project.id
+                        scan = runCatching { workspace.scan(project.id) }.getOrNull()
+                        output = ""
+                    }) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Folder, null, tint = Accent)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(project.name, fontWeight = FontWeight.SemiBold)
+                                Text("${project.kind} · ${project.fileCount} 个文件", color = Muted, fontSize = 11.sp)
+                            }
+                            if (selectedId == project.id) Icon(Icons.Default.CheckCircle, null, tint = Accent)
+                        }
+                    }
+                }
             }
         }
-        Text("下一阶段：文件树、代码编辑器、Git 差异审查与回滚。", color = Muted, fontSize = 12.sp)
+        scan?.let { current ->
+            Divider()
+            Text("工程分析：${current.project.name}", fontWeight = FontWeight.SemiBold)
+            Text("类型：${current.buildSystem} · 文件：${current.files.size}", color = Muted, fontSize = 12.sp)
+            current.warnings.forEach { Text("• $it", color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+            Text("文件清单", fontWeight = FontWeight.Medium, fontSize = 12.sp)
+            LazyColumn(Modifier.weight(0.6f, fill = true)) {
+                items(current.files.take(40)) { path ->
+                    Text(path, Modifier.fillMaxWidth().padding(vertical = 3.dp), fontSize = 11.sp)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = !busy && current.buildCommand != null, onClick = {
+                    scope.launch {
+                        busy = true; output = "正在执行构建……"
+                        val result = runner.run(current, false)
+                        output = "命令：${result.command}\n退出码：${result.exitCode ?: "无"}\n耗时：${result.durationMs} ms\n\n${result.output}"
+                        busy = false
+                    }
+                }) { Text("构建") }
+                OutlinedButton(enabled = !busy && current.testCommand != null, onClick = {
+                    scope.launch {
+                        busy = true; output = "正在执行测试……"
+                        val result = runner.run(current, true)
+                        output = "命令：${result.command}\n退出码：${result.exitCode ?: "无"}\n耗时：${result.durationMs} ms\n\n${result.output}"
+                        busy = false
+                    }
+                }) { Text("测试") }
+                OutlinedButton(onClick = {
+                    runCatching { workspace.scan(current.project.id) }
+                        .onSuccess { scan = it; output = "扫描完成。" }
+                        .onFailure { output = "扫描失败：" + it.message }
+                }) { Text("重新扫描") }
+            }
+        }
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (output.isNotBlank()) {
+            Surface(Modifier.fillMaxWidth().weight(0.7f, fill = true),
+                color = Color(0xFF171715), shape = RoundedCornerShape(10.dp)) {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(output, Modifier.fillMaxWidth().padding(12.dp),
+                        color = Color(0xFFE4E1DA), fontSize = 11.sp, lineHeight = 16.sp)
+                }
+            }
+        }
     }
 }
 
