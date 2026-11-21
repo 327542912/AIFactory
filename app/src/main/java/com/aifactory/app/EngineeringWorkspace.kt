@@ -253,6 +253,12 @@ class EngineeringWorkspace(private val context: Context) {
         return listProjects().first { it.id == project.id }
     }
 
+    fun validateRelativePath(projectId: String, relativePath: String): String {
+        val target = resolve(projectDir(projectId), relativePath)
+        require(target.name != ".aifactory-project.json") { "不能修改项目内部元数据" }
+        return relativePath
+    }
+
     fun projectPath(projectId: String): File = projectDir(projectId)
 
     private fun projectDir(id: String): File {
