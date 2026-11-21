@@ -17,6 +17,7 @@ class AgentOrchestrator(private val context: Context) {
     private val workspace = EngineeringWorkspace(context)
     private val commandRunner = ProjectCommandRunner()
     private val pendingChanges = PendingChangeStore(context)
+    private val taskEngine = AgentTaskEngine(context)
 
     suspend fun respond(
         baseUrl: String,
@@ -133,6 +134,41 @@ class AgentOrchestrator(private val context: Context) {
                 JSONObject().put("ok", true).put("path", path)
                     .put("content", value).toString()
             }
+            "create_task_plan" -> {
+                val inputTasks = args.getJSONArray("tasks")
+                require(inputTasks.length() in 1..40) { "任务计划必须包含 1 到 40 项" }
+                val tasks = (0 until inputTasks.length()).map { i ->
+                    val item = inputTasks.getJSONObject(i)
+                    val deps = item.optJSONArray("depends_on") ?: JSONArray()
+                    NewTask(
+                        title = item.getString("title"),
+                        description = item.optString("description"),
+                        kind = item.optString("kind", "manual"),
+                        dependsOn = (0 until deps.length()).map { deps.getString(it) },
+                        id = item.optString("id")
+                    )
+                }
+                val created = taskEngine.createPlan(tasks)
+                val ready = taskEngine.nextReady()
+                val result = JSONArray()
+                created.forEach { t ->
+                    result.put(JSONObject().put("id", t.id).put("title", t.title)
+                        .put("kind", t.kind).put("depends_on", JSONArray(t.dependsOn)))
+                }
+                JSONObject().put("ok", true).put("tasks", result)
+                    .put("ready_count", ready.size)
+                    .put("message", "任务 DAG 已保存。当前仅持久化计划，不代表任务已经执行。").toString()
+            }
+            "get_task_status" -> {
+                val result = JSONArray()
+                taskEngine.tasks().forEach { t ->
+                    result.put(JSONObject().put("id", t.id).put("title", t.title)
+                        .put("kind", t.kind).put("status", t.status.name)
+                        .put("depends_on", JSONArray(t.dependsOn)).put("result", t.result))
+                }
+                JSONObject().put("ok", true).put("tasks", result)
+                    .put("history_count", taskEngine.history().size).toString()
+            }
             "propose_file_change" -> {
                 val projectId = args.getString("project_id")
                 val path = workspace.validateRelativePath(projectId, args.getString("path"))
@@ -192,6 +228,24 @@ class AgentOrchestrator(private val context: Context) {
                 .put("path", property("string", "项目相对文件路径")))
             .put("required", JSONArray().put("project_id").put("path"))
             .put("additionalProperties", false)))
+        tools.put(tool("create_task_plan", "保存带依赖关系的工程任务 DAG；只创建计划，不会执行任务。", JSONObject()
+            .put("type", "object")
+            .put("properties", JSONObject().put("tasks", JSONObject()
+                .put("type", "array").put("minItems", 1).put("maxItems", 40)
+                .put("items", JSONObject().put("type", "object")
+                    .put("properties", JSONObject()
+                        .put("id", property("string", "任务 ID，依赖引用时必须提供"))
+                        .put("title", property("string", "任务标题"))
+                        .put("description", property("string", "任务说明"))
+                        .put("kind", property("string", "scan/read/write/build/test/review/manual 之一"))
+                        .put("depends_on", JSONObject().put("type", "array")
+                            .put("items", JSONObject().put("type", "string"))))
+                    .put("required", JSONArray().put("id").put("title").put("kind").put("depends_on"))
+                    .put("additionalProperties", false)))
+            .put("required", JSONArray().put("tasks"))
+            .put("additionalProperties", false)))
+        tools.put(tool("get_task_status", "读取当前持久化任务 DAG 和状态历史摘要。", JSONObject()
+            .put("type", "object").put("properties", JSONObject()).put("additionalProperties", false)))
         tools.put(tool("propose_file_change", "提出完整文件内容替换建议。只保存为待审批项，不会直接写入源码。", JSONObject()
             .put("type", "object")
             .put("properties", JSONObject()
