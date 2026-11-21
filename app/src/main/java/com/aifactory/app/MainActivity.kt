@@ -315,6 +315,9 @@ private fun ProjectsPage() {
     var scan by remember { mutableStateOf<ProjectScan?>(null) }
     var output by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var editPath by remember { mutableStateOf("") }
+    var editContent by remember { mutableStateOf("") }
+    var lastCheckpoint by remember { mutableStateOf("") }
 
     fun refresh() {
         projects = workspace.listProjects()
@@ -378,8 +381,44 @@ private fun ProjectsPage() {
             Text("文件清单", fontWeight = FontWeight.Medium, fontSize = 12.sp)
             LazyColumn(Modifier.weight(0.6f, fill = true)) {
                 items(current.files.take(40)) { path ->
-                    Text(path, Modifier.fillMaxWidth().padding(vertical = 3.dp), fontSize = 11.sp)
+                    TextButton(onClick = {
+                        editPath = path
+                        runCatching { workspace.readFile(current.project.id, path) }
+                            .onSuccess { editContent = it; output = "已载入：$path" }
+                            .onFailure { editContent = ""; output = "读取失败：" + it.message }
+                    }, modifier = Modifier.fillMaxWidth()) {
+                        Text(path, Modifier.fillMaxWidth(), fontSize = 11.sp)
+                    }
                 }
+            }
+            OutlinedTextField(
+                editPath, { editPath = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("项目相对路径") },
+                singleLine = true
+            )
+            OutlinedTextField(
+                editContent, { editContent = it },
+                modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp, max = 190.dp),
+                label = { Text("文件内容（UTF-8，最大 2 MB）") },
+                minLines = 3
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = editPath.isNotBlank(), onClick = {
+                    runCatching { workspace.readFile(current.project.id, editPath) }
+                        .onSuccess { editContent = it; output = "读取成功。" }
+                        .onFailure { output = "读取失败：" + it.message }
+                }) { Text("读取") }
+                Button(enabled = editPath.isNotBlank(), onClick = {
+                    runCatching { workspace.writeFile(current.project.id, editPath, editContent) }
+                        .onSuccess { lastCheckpoint = it; refresh(); output = "保存成功。检查点：$it" }
+                        .onFailure { output = "保存失败：" + it.message }
+                }) { Text("保存并创建检查点") }
+                OutlinedButton(enabled = lastCheckpoint.isNotBlank(), onClick = {
+                    runCatching { workspace.rollback(current.project.id, lastCheckpoint) }
+                        .onSuccess { refresh(); output = "已回滚检查点：$lastCheckpoint"; lastCheckpoint = "" }
+                        .onFailure { output = "回滚失败：" + it.message }
+                }) { Text("回滚") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy && current.buildCommand != null, onClick = {
