@@ -10,7 +10,7 @@ Independent Android engineering-workbench prototype. All changes in this branch 
 - UTF-8 project file reader/editor with canonical-path containment checks, per-file size limits and before-write checkpoints.
 - Checkpoint rollback for individual file changes.
 - A constrained project build/test runner that does not invoke a shell and only accepts exact allowlisted command forms.
-- Persistent task DAG ledger with dependency-cycle validation, legal state transitions, event history and interrupted-task marking.
+- Persistent task DAG ledger with dependency-cycle validation, legal state transitions, event history and interrupted-task marking.\n- OpenAI-compatible tool-calling loop for listing projects, scanning project structure and reading bounded UTF-8 source files. Build/test tools are exposed only when the user enables the explicit opt-in.
 - Android CI workflow builds a debug APK and uploads it as an Actions artifact.
 
 ## Important runtime limitations
@@ -21,8 +21,8 @@ This is **not yet a complete autonomous coding agent** and must not be described
 - No embedded Linux rootfs, package manager, JDK, Gradle distribution, Python, Node.js, CMake or compiler toolchain is bundled.
 - Project build/test execution therefore succeeds only if the required executable is already available to the Android app process and the project wrapper is executable. A normal Termux installation is not automatically visible to this app.
 - The task DAG persistence layer is implemented but is not yet connected to a model-driven planner/executor loop.
-- Chat still sends ordinary OpenAI-compatible chat-completion requests; it does not yet consume structured tool calls or safely run model-generated edit/build/repair plans.
-- The app does not yet provide a foreground task service, reliable process continuation after Android kills the app, multi-agent orchestration, plugin sandboxing, encrypted credential vault, APK signing/release workflow or self-update.
+- The agent can inspect projects through structured tool calls and can optionally invoke the fixed build/test runner. It has no source-write tool, automatic patch application or failure-repair loop yet; code changes remain manual in the checkpointed editor.
+- Text/source attachments are read with per-file and total size caps when explicitly sent; images, PDF and Office content are not yet parsed.\n- The app does not yet provide a foreground task service, reliable process continuation after Android kills the app, multi-agent orchestration, plugin sandboxing, encrypted credential vault, APK signing/release workflow or self-update.
 - The imported project is a copy inside the app's private storage. It does not modify the original selected directory.
 
 ## Build
