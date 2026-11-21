@@ -139,7 +139,8 @@ class EngineeringWorkspace(private val context: Context) {
         val target = resolve(root, relativePath)
         require(target.name != ".aifactory-project.json") { "不能修改项目内部元数据" }
         val checkpoint = checkpoint(projectId, relativePath, target)
-        check(target.parentFile?.mkdirs() != false) { "创建父目录失败" }
+        val parent = target.parentFile
+        check(parent != null && (parent.isDirectory || parent.mkdirs())) { "创建父目录失败" }
         val temp = File(target.parentFile, target.name + ".aifactory-tmp")
         temp.writeText(content, Charsets.UTF_8)
         check(temp.renameTo(target)) { "原子替换文件失败" }
