@@ -53,6 +53,49 @@ jobs:
 
           grep -nE 'TERMUX_APP(_|__)?PACKAGE' scripts/properties.sh
 
+      - name: Omit optional foot terminfo source
+        working-directory: termux-packages
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          p = Path("packages/ncurses/build.sh")
+          s = p.read_text()
+
+          for var in ("VERSION", "SRCURL", "SHA256"):
+              pattern = re.compile(
+                  rf'(?m)^[ \t]*"\$\(\. "\$TERMUX_SCRIPTDIR/'
+                  rf'x11-packages/foot/build\.sh"; '
+                  rf'echo "\$TERMUX_PKG_{var}"\)"\)\s*$'
+              )
+              s, n = pattern.subn(")", s)
+              if n != 1:
+                  raise SystemExit(
+                      f"Expected one foot {var} array entry, found {n}"
+                  )
+
+          removals = [
+              '    cp "$TERMUX_PKG_TMPDIR"/full-terminfo/f/foot{,+base,-direct} "$TI/f/"',
+              "    sed 's/@default_terminfo@/foot/g' \"$TERMUX_PKG_SRCDIR/foot/foot.info\" | \\\\",
+              "    tic -x -e foot,foot-direct -o \"$TI\" -",
+          ]
+
+          for line in removals:
+              if s.count(line) != 1:
+                  raise SystemExit(f"Expected exactly one line: {line}")
+              s = s.replace(line + "\n", "")
+
+          if "x11-packages/foot/build.sh" in s or "foot/foot.info" in s:
+              raise SystemExit("Foot source reference remains")
+
+          p.write_text(s)
+          print("Removed optional foot terminfo source; SHA-256 checks remain enabled.")
+          PY
+
+          git diff --check
+          git diff -- packages/ncurses/build.sh
+
       - name: Build matching Android NDK Docker image
         working-directory: termux-packages
         run: |
