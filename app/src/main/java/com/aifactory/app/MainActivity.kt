@@ -283,9 +283,9 @@ private fun ChatPage(
                                 messages.add(ChatMessage("assistant", "请先打开模型设置，填写 API 地址、模型名称和 API Key。"))
                                 busy = false
                             } else {
-                                val answer = withContext(Dispatchers.IO) {
+                                val answer = runCatching {
                                     AgentOrchestrator(context).respond(baseUrl, model, apiKey, messages.toList(), allowBuildTest)
-                                }
+                                }.getOrElse { "代理请求失败：${it.message}" }
                                 messages.add(ChatMessage("assistant", answer))
                                 busy = false
                             }
