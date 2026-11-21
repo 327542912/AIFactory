@@ -327,6 +327,7 @@ private fun ProjectsPage() {
     val context = LocalContext.current
     val workspace = remember(context) { EngineeringWorkspace(context) }
     val runner = remember { ProjectCommandRunner() }
+    val pendingStore = remember(context) { PendingChangeStore(context) }
     val scope = rememberCoroutineScope()
     var projects by remember { mutableStateOf(workspace.listProjects()) }
     var projectName by remember { mutableStateOf("") }
@@ -337,8 +338,10 @@ private fun ProjectsPage() {
     var editPath by remember { mutableStateOf("") }
     var editContent by remember { mutableStateOf("") }
     var lastCheckpoint by remember { mutableStateOf("") }
+    var pendingChanges by remember { mutableStateOf(pendingStore.list()) }
     fun refresh() {
         projects = workspace.listProjects()
+        pendingChanges = pendingStore.list()
         selectedId?.let { id ->
             scan = runCatching { workspace.scan(id) }.getOrNull()
         }
@@ -417,6 +420,40 @@ private fun ProjectsPage() {
             Text("工程分析：${current.project.name}", fontWeight = FontWeight.SemiBold)
             Text("类型：${current.buildSystem} · 文件：${current.files.size}", color = Muted, fontSize = 12.sp)
             current.warnings.forEach { Text("• $it", color = MaterialTheme.colorScheme.error, fontSize = 11.sp) }
+            val projectProposals = pendingChanges.filter { it.projectId == current.project.id }
+            if (projectProposals.isNotEmpty()) {
+                Text("AI 修改建议 · 待人工审批（${projectProposals.size}）",
+                    fontWeight = FontWeight.SemiBold, color = Accent)
+                projectProposals.forEach { proposal ->
+                    Card {
+                        Column(Modifier.fillMaxWidth().padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text(proposal.path, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            Text(proposal.reason, color = Muted, fontSize = 11.sp)
+                            Text(proposal.content.take(900),
+                                fontSize = 10.sp, maxLines = 8,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = {
+                                    runCatching {
+                                        workspace.writeFile(current.project.id, proposal.path, proposal.content)
+                                    }.onSuccess { checkpointId ->
+                                        pendingStore.remove(proposal.id)
+                                        lastCheckpoint = checkpointId
+                                        refresh()
+                                        output = "已由用户批准并应用修改。检查点：$checkpointId"
+                                    }.onFailure { output = "应用失败：" + it.message }
+                                }) { Text("审阅后应用") }
+                                OutlinedButton(onClick = {
+                                    pendingStore.remove(proposal.id)
+                                    refresh()
+                                    output = "已拒绝修改建议。"
+                                }) { Text("拒绝") }
+                            }
+                        }
+                    }
+                }
+            }
             Text("文件清单", fontWeight = FontWeight.Medium, fontSize = 12.sp)
             LazyColumn(Modifier.weight(0.6f, fill = true)) {
                 items(current.files.take(40)) { path ->
