@@ -1,7 +1,15 @@
 name: Build AIFactory ARM64 Runtime
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
+    inputs:
+      extra_packages:
+        description: "额外打进 bootstrap 的包（逗号分隔；留空 = 只构建基础 bootstrap）"
+        required: false
+        default: "openjdk-21,gradle,apksigner,git,zip,unzip"
   push:
     branches: [master]
     paths:
@@ -117,18 +125,27 @@ jobs:
           git diff --check
           git diff -- packages/ncurses/build.sh
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
       - name: Build matching Android NDK Docker image
         working-directory: termux-packages
         run: |
           docker build -t ghcr.io/termux/package-builder ./scripts
 
       - name: Build ARM64 bootstrap
+        env:
+          EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages || 'openjdk-21,gradle,apksigner,git,zip,unzip' }}
         run: |
           cd termux-packages
-          ./scripts/run-docker.sh \
-            ./scripts/build-bootstraps.sh \
-            --android10 \
-            --architectures aarch64
+          # 注意：不能加 --android10。该模式生成的是「APK 打包系统」bootstrap：
+          # 没有 apt/dpkg、改用 proot，只适用于 targetSdk>=29。
+          # AIFactory 使用 targetSdk 28 直接 execve，需要标准 bootstrap。
+          ARGS=(--architectures aarch64)
+          if [ -n "$EXTRA_PACKAGES" ]; then ARGS+=(--packages-post-additional "$EXTRA_PACKAGES"); fi
+          ./scripts/run-docker.sh ./scripts/build-bootstraps.sh "${ARGS[@]}"
 
       - name: Verify bootstrap
         run: |
@@ -143,3 +160,17 @@ jobs:
           path: termux-packages/bootstrap-aarch64.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish release (stable download URL)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=runtime-latest
+          sha256sum termux-packages/bootstrap-aarch64.zip | cut -d' ' -f1 > bootstrap-aarch64.zip.sha256
+          gh release delete "$TAG" --cleanup-tag -y --repo "$GITHUB_REPOSITORY" || true
+          gh release create "$TAG" \
+            termux-packages/bootstrap-aarch64.zip bootstrap-aarch64.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AIFactory runtime (aarch64)" \
+            --notes "SHA-256: $(cat bootstrap-aarch64.zip.sha256)"
+          echo "URL: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/bootstrap-aarch64.zip"
