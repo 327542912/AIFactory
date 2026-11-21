@@ -205,6 +205,52 @@ jobs:
           PY
           grep -n 'command-not-found' scripts/build-bootstraps.sh || echo "no remaining reference"
 
+      - name: Fix dead source mirrors (dos2unix, nano)
+        run: |
+          set -euo pipefail
+          cd termux-packages
+          # dos2unix: waterlan.home.xs4all.nl 返回 12KB 错误页，tarball SHA256 与配方不符
+          # 换到 distfiles.macports.org，已逐字节核对 991485 字节 / 26474244...4bf3a 一致
+          sed -i 's|https://waterlan.home.xs4all.nl/dos2unix/|https://distfiles.macports.org/dos2unix/|' packages/dos2unix/build.sh
+          # nano: nano-editor.org 全站 503；ftp.gnu.org 的 nano-8.5.tar.xz 1707128 字节哈希一致
+          sed -i 's|https://nano-editor.org/dist/latest/|https://ftp.gnu.org/gnu/nano/|' packages/nano/build.sh
+          grep -n 'TERMUX_PKG_SRCURL=' packages/dos2unix/build.sh packages/nano/build.sh
+
+      - name: Preflight verify source hashes
+        run: |
+          set -uo pipefail
+          cd termux-packages
+          printf '%-16s %-12s %s\n' PACKAGE RESULT URL
+          fail=0
+          for p in bash bzip2 coreutils curl dash diffutils findutils gawk grep gzip less procps psmisc sed tar \
+                   termux-core termux-exec termux-keyring termux-tools util-linux xz-utils apt gpgv \
+                   ed debianutils dos2unix inetutils lsof nano net-tools patch unzip \
+                   openjdk-21 gradle apksigner git zip; do
+            d="packages/$p"
+            if [ ! -f "$d/build.sh" ]; then
+              sub=$(find packages -maxdepth 2 -name "$p.subpackage.sh" 2>/dev/null | head -1)
+              [ -n "$sub" ] && d=$(dirname "$sub") || { printf '%-16s %-12s\n' "$p" "no-recipe"; continue; }
+            fi
+            b="$d/build.sh"
+            ver=$(sed -nE 's/^TERMUX_PKG_VERSION=["'\'']?([^"'\'' ]+).*/\1/p' "$b" | head -1)
+            url=$(sed -nE 's/^TERMUX_PKG_SRCURL=["'\'']?([^"'\'' ]+).*/\1/p' "$b" | head -1)
+            sha=$(sed -nE 's/^TERMUX_PKG_SHA256=["'\'']?([0-9a-f]{64}).*/\1/p' "$b" | head -1)
+            if [ -z "$url" ]; then printf '%-16s %-12s\n' "$p" "no-SRCURL"; continue; fi
+            url=$(TERMUX_PKG_VERSION="$ver" eval "echo $url" 2>/dev/null)
+            code=$(curl -fL --retry 3 --retry-delay 2 --retry-all-errors --max-time 150 -s -o /tmp/_pf "$url" -w '%{http_code}' 2>/dev/null || echo ERR)
+            case "$code" in
+              200) ;;
+              404|410) printf '%-16s %-12s %s\n' "$p" "DEAD($code)" "$url"; fail=1; continue ;;
+              *)       printf '%-16s %-12s %s\n' "$p" "WARN($code)" "$url"; continue ;;
+            esac
+            got=$(sha256sum /tmp/_pf | cut -d' ' -f1)
+            if [ -z "$sha" ]; then printf '%-16s %-12s %s\n' "$p" "OK(no-sha)" "$url"
+            elif [ "$got" = "$sha" ]; then printf '%-16s %-12s %s\n' "$p" "OK" "$url"
+            else printf '%-16s %-12s %s\n' "$p" "HASH-DIFF" "$url"; fail=1; fi
+          done
+          if [ "$fail" -ne 0 ]; then echo "::error::source preflight failed - 死链或哈希不符，编译前拦下"; exit 1; fi
+          echo "preflight OK"
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /opt/hostedtoolcache/CodeQL || true
