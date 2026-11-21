@@ -647,7 +647,7 @@ private fun SettingsPage() {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(16.dp)) {
                 Text("安全策略", fontWeight = FontWeight.SemiBold)
-                Text("构建、测试和工作区内修改可自动化。删除数据、访问凭据、网络外发、安装插件和正式发布需要审批。", fontSize = 13.sp, lineHeight = 20.sp)
+                Text("项目扫描和源码读取可由代理调用。构建/测试必须显式开启授权；源码写入须由用户在编辑器中确认并自动建立检查点。删除数据、访问凭据、网络外发、安装插件和正式发布仍需单独审批。", fontSize = 13.sp, lineHeight = 20.sp)
             }
         }
     }
