@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private fun PackageManager.packageInfoOrNull(name: String) = try { getPackageInfo(name, 0) } catch (_: Exception) { null }
-private data class ChatMessage(val role: String, val text: String)
+data class ChatMessage(val role: String, val text: String)
 private enum class Page(val label: String) { CHAT("对话"), PROJECTS("项目"), FILES("文件"), TERMINAL("终端"), PLUGINS("插件"), SETTINGS("设置") }
 
 @Composable
@@ -185,6 +185,7 @@ private fun ChatPage(
     var apiKey by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var allowBuildTest by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize()) {
@@ -283,7 +284,7 @@ private fun ChatPage(
                                 busy = false
                             } else {
                                 val answer = withContext(Dispatchers.IO) {
-                                    requestChat(baseUrl, model, apiKey, messages.toList())
+                                    AgentOrchestrator(context).respond(baseUrl, model, apiKey, messages.toList(), allowBuildTest)
                                 }
                                 messages.add(ChatMessage("assistant", answer))
                                 busy = false
@@ -291,7 +292,11 @@ private fun ChatPage(
                         }
                     }) { Icon(Icons.Default.ArrowUpward, "发送", tint = Accent) }
                 }
-                Text("Auto 模式目标：规划、编码、构建、测试与修复；本版本尚未开放自主工具调用。", Modifier.padding(start = 4.dp, top = 5.dp), color = Muted, fontSize = 10.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = allowBuildTest, onCheckedChange = { allowBuildTest = it })
+                    Text("允许代理在本轮运行项目构建/测试命令", color = Muted, fontSize = 11.sp)
+                }
+                Text("代理可列出项目、扫描工程、读取源码；源码写入仍需在项目编辑器中人工确认。", Modifier.padding(start = 4.dp), color = Muted, fontSize = 10.sp)
             }
         }
     }
