@@ -268,7 +268,7 @@ class EngineeringWorkspace(private val context: Context) {
     }
 
     private fun resolve(root: File, relative: String): File {
-        require(relative.isNotBlank() && !relative.startsWith("/") && !relative.contains('\\u0000')) { "文件路径无效" }
+        require(relative.isNotBlank() && !relative.startsWith("/") && relative.indexOf(0.toChar()) < 0) { "文件路径无效" }
         val target = File(root, relative).canonicalFile
         require(target.path.startsWith(root.canonicalPath + File.separator)) { "拒绝访问项目目录之外的路径" }
         return target
