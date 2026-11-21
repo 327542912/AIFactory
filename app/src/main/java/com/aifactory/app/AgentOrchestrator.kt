@@ -127,13 +127,16 @@ class AgentOrchestrator(private val context: Context) {
                     .put("files", files).put("warnings", JSONArray(scan.warnings)).toString()
             }
             "read_project_file" -> {
-                val value = workspace.readFile(args.getString("project_id"), args.getString("path"), 96 * 1024)
-                JSONObject().put("ok", true).put("path", args.getString("path"))
+                val path = args.getString("path")
+                require(!isSensitivePath(path)) { "出于凭据保护，代理不能读取密钥、环境变量或凭据文件。" }
+                val value = workspace.readFile(args.getString("project_id"), path, 96 * 1024)
+                JSONObject().put("ok", true).put("path", path)
                     .put("content", value).toString()
             }
             "propose_file_change" -> {
                 val projectId = args.getString("project_id")
                 val path = workspace.validateRelativePath(projectId, args.getString("path"))
+                require(!isSensitivePath(path)) { "出于凭据保护，代理不能修改密钥、环境变量或凭据文件。" }
                 val proposal = pendingChanges.add(
                     projectId, path, args.getString("content"), args.optString("reason")
                 )
@@ -152,12 +155,28 @@ class AgentOrchestrator(private val context: Context) {
                     JSONObject().put("ok", result.exitCode == 0 && !result.timedOut)
                         .put("command", result.command).put("exit_code", result.exitCode ?: JSONObject.NULL)
                         .put("timed_out", result.timedOut).put("duration_ms", result.durationMs)
-                        .put("output", result.output.take(12000)).toString()
+                        .put("output", redactSecrets(result.output).take(12000)).toString()
                 }
             }
             else -> JSONObject().put("ok", false).put("error", "未注册的工具：$name").toString()
         }
     }
+
+    private fun isSensitivePath(path: String): Boolean {
+        val name = path.substringAfterLast('/').lowercase()
+        val ext = name.substringAfterLast('.', "")
+        return name == ".env" || name.startsWith(".env.") ||
+            name in setOf("local.properties", "keystore.properties", "credentials.json",
+                "service-account.json", "secrets.json", "id_rsa", "id_ed25519") ||
+            name.contains("secret") || name.contains("credential") ||
+            ext in setOf("jks", "keystore", "p12", "pfx", "pem", "key")
+    }
+
+    private fun redactSecrets(value: String): String =
+        value.replace(
+            Regex("(?i)(api[_-]?key|access[_-]?token|password|passwd|secret|authorization)\\s*[:=]\\s*[^\\s,;]+"),
+            "$1=[REDACTED]"
+        )
 
     private fun toolDefinitions(): JSONArray {
         val tools = JSONArray()
