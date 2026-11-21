@@ -86,7 +86,7 @@ class EngineeringWorkspace(private val context: Context) {
             if (files.size >= 1500) { truncated = true; return }
             val children = current.listFiles()?.sortedBy { it.name } ?: return
             for (child in children) {
-                if (child.name in ignored || child.name.startsWith(".")) continue
+                if (child.name in ignored || child.name == ".DS_Store") continue
                 val rel = if (relative.isEmpty()) child.name else "$relative/${child.name}"
                 if (child.isDirectory) visit(child, rel)
                 else if (child.isFile) files += rel
@@ -207,7 +207,7 @@ class EngineeringWorkspace(private val context: Context) {
                 val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
                 while (cursor.moveToNext()) {
                     val rawName = cursor.getString(nameCol) ?: continue
-                    if (rawName.startsWith(".") || rawName in skipped) continue
+                    if (rawName in skipped || rawName == ".DS_Store") continue
                     val name = rawName.replace("/", "_").replace("\\", "_").trim()
                     if (name.isBlank() || name == "." || name == "..") continue
                     val childId = cursor.getString(idCol)
