@@ -39,7 +39,11 @@ private val Accent = Color(0xFFB66B45)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { AIFactoryApp(::dispatchTermuxCommand) }
+        setContent {
+            AIFactoryApp { command ->
+                RuntimeEngine(applicationContext).execute(command)
+            }
+        }
     }
 
     private fun dispatchTermuxCommand(command: String): String {
@@ -69,7 +73,7 @@ private data class ChatMessage(val role: String, val text: String)
 private enum class Page(val label: String) { CHAT("对话"), PROJECTS("项目"), FILES("文件"), TERMINAL("终端"), PLUGINS("插件"), SETTINGS("设置") }
 
 @Composable
-private fun AIFactoryApp(runCommand: (String) -> String) {
+private fun AIFactoryApp(runCommand: suspend (String) -> String) {
     var page by remember { mutableStateOf(Page.CHAT) }
     var dark by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -315,16 +319,123 @@ private fun ProjectsPage() {
 }
 
 @Composable
-private fun TerminalPage(runCommand: (String) -> String) {
+private fun TerminalPage(runCommand: suspend (String) -> String) {
     var command by remember { mutableStateOf("pwd && ls -la") }
-    var result by remember { mutableStateOf("输入命令后发送到 Termux。初版只确认派发，不回传 shell 输出。") }
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Termux Terminal", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("需要 Termux RUN_COMMAND 权限，并启用 allow-external-apps。", color = Muted, fontSize = 12.sp)
-        OutlinedTextField(command, { command = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Shell 命令") }, minLines = 2)
-        Button(onClick = { result = runCommand(command) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("发送到 Termux") }
-        Surface(Modifier.fillMaxWidth().weight(1f), color = Color(0xFF171715), shape = RoundedCornerShape(14.dp)) {
-            Text(result, Modifier.padding(14.dp), color = Color(0xFFE4E1DA), fontSize = 12.sp, lineHeight = 18.sp)
+    var result by remember {
+        mutableStateOf(
+            "AIFactory 独立 Shell 已接入。\n" +
+            "工作目录：AIFactory 私有 workspace"
+        )
+    }
+    var running by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    Column(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            "AIFactory Runtime",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Text(
+            "独立本地 Shell · 不依赖 Termux App",
+            color = Muted,
+            fontSize = 12.sp
+        )
+
+        OutlinedTextField(
+            command,
+            { command = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Shell 命令") },
+            minLines = 2,
+            enabled = !running
+        )
+
+        Button(
+            enabled = command.isNotBlank() && !running,
+            onClick = {
+                scope.launch {
+                    running = true
+                    result = "正在执行……"
+                    try {
+                        result = runCommand(command)
+                    } catch (e: Exception) {
+                        result = "执行失败：${e.message}"
+                    } finally {
+                        running = false
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (running) {
+                CircularProgressIndicator(
+                    Modifier.size(18.dp),
+                    strokeWidth = 2.dp
+                )
+                Spacer(Modifier.width(8.dp))
+                Text("执行中")
+            } else {
+                Icon(Icons.Default.PlayArrow, null)
+                Spacer(Modifier.width(6.dp))
+                Text("执行命令")
+            }
+        }
+
+        Surface(
+            Modifier.fillMaxWidth().weight(1f),
+            color = Color(0xFF171715),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(
+                        start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp
+                    ),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "终端输出",
+                        color = Color(0xFFE4E1DA),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = {
+                            clipboard.setText(
+                                androidx.compose.ui.text.AnnotatedString(result)
+                            )
+                        },
+                        enabled = result.isNotEmpty()
+                    ) {
+                        Text("复制全部")
+                    }
+                }
+
+                Divider(color = Color(0xFF393936))
+
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    LazyColumn(
+                        Modifier.fillMaxSize()
+                    ) {
+                        item {
+                            Text(
+                                result,
+                                Modifier.fillMaxWidth().padding(14.dp),
+                                color = Color(0xFFE4E1DA),
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
