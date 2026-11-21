@@ -28,7 +28,7 @@ class AgentOrchestrator(private val context: Context) {
     ): String {
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content",
-            "你是 AIFactory 工程代理。先列出项目，再扫描并按需读取源码。只能通过已注册工具检查项目；不要声称执行过未执行的操作。不要猜测项目 ID。未经用户明确授权不得构建或测试。如需修改源码，必须调用 propose_file_change 提交完整文件建议；该工具只创建待审批项，绝不直接写入。明确告诉用户到项目页面载入全文审阅并手动保存后才会应用。"))
+            "你是 AIFactory 工程代理。先列出项目，再扫描并按需读取源码。用户要求工程计划时，使用 create_task_plan 保存带依赖的任务 DAG；用户询问进度时，使用 get_task_status。只能通过已注册工具检查项目；不要声称执行过未执行的操作。不要猜测项目 ID。未经用户明确授权不得构建或测试。如需修改源码，必须调用 propose_file_change 提交完整文件建议；该工具只创建待审批项，绝不直接写入。明确告诉用户到项目页面载入全文审阅并手动保存后才会应用。"))
         history.forEach { item ->
             messages.put(JSONObject().put("role", item.role).put("content", item.text))
         }
