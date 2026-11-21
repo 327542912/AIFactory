@@ -3,6 +3,10 @@ name: Build AIFactory ARM64 Runtime
 permissions:
   contents: write
 
+concurrency:
+  group: runtime-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +14,10 @@ on:
         description: "额外打进 bootstrap 的包（逗号分隔；留空 = 只构建基础 bootstrap）"
         required: false
         default: "openjdk-21,gradle,apksigner,git,zip,unzip"
+      repo_packages:
+        description: "额外构建并发布到 apt 软件源的包（逗号分隔，供 pkg install 使用；留空 = 跳过）"
+        required: false
+        default: "python,nodejs,curl,wget,jq,ripgrep,nano,make"
   push:
     branches: [master]
     paths:
@@ -201,6 +209,23 @@ jobs:
           if [ -n "$EXTRA_PACKAGES" ]; then ARGS+=(--packages-post-additional "$EXTRA_PACKAGES"); fi
           ./scripts/run-docker.sh ./scripts/build-bootstraps.sh "${ARGS[@]}"
 
+      - name: Locate bootstrap
+        if: success()
+        working-directory: .
+        run: |
+          set -x
+          cd termux-packages
+          Z=$(find . -maxdepth 3 -name 'bootstrap-aarch64.zip' | head -1)
+          if [ -z "$Z" ]; then
+            echo "bootstrap-aarch64.zip not found"
+            ls -la
+            ls -la output 2>/dev/null | head -50
+            exit 1
+          fi
+          [ "$Z" = "./bootstrap-aarch64.zip" ] || cp "$Z" ./bootstrap-aarch64.zip
+          ls -lh bootstrap-aarch64.zip
+          sha256sum bootstrap-aarch64.zip
+
       - name: Verify bootstrap
         run: |
           test -s termux-packages/bootstrap-aarch64.zip
@@ -228,3 +253,45 @@ jobs:
             --title "AIFactory runtime (aarch64)" \
             --notes "SHA-256: $(cat bootstrap-aarch64.zip.sha256)"
           echo "URL: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/bootstrap-aarch64.zip"
+
+      - name: Build extra packages for the apt repo
+        env:
+          REPO_PACKAGES: ${{ github.event.inputs.repo_packages || 'python,nodejs,curl,wget,jq,ripgrep,nano,make' }}
+        run: |
+          if [ -z "${REPO_PACKAGES:-}" ]; then echo "repo_packages empty, skip"; exit 0; fi
+          cd termux-packages
+          ./scripts/run-docker.sh ./build-package.sh -a aarch64 $(echo "$REPO_PACKAGES" | tr ',' ' ')
+
+      - name: Publish apt repo (pkg install source)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -ex
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils
+          TAG=runtime-repo
+          mkdir -p repo newdebs
+          # GitHub 会把文件名里 [A-Za-z0-9._-] 以外的字符替换成 '.'，先自己改好，保证索引里的文件名与资产名一致
+          for f in termux-packages/output/*.deb; do
+            [ -e "$f" ] || continue
+            n=$(basename "$f" | sed 's/[^A-Za-z0-9._-]/./g')
+            cp "$f" "newdebs/$n"
+          done
+          ls newdebs | head -200 || true
+          # 保留以前发布过的包，保证索引完整
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir repo || true
+          cp newdebs/* repo/ 2>/dev/null || true
+          cd repo
+          dpkg-scanpackages -m . > Packages
+          gzip -k -f Packages
+          apt-ftparchive release . > Release
+          cd ..
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "AIFactory apt repo (aarch64)" \
+              --notes "deb [trusted=yes] https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ ./"
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            newdebs/* repo/Packages repo/Packages.gz repo/Release
+          echo "APT: deb [trusted=yes] https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ ./"
+
