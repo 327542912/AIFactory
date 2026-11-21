@@ -1,6 +1,9 @@
 package com.aifactory.app
 
 import android.content.Context
+import android.net.Uri
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -175,6 +178,78 @@ class EngineeringWorkspace(private val context: Context) {
         } else {
             if (target.isFile) check(target.delete()) { "删除新建文件失败" }
         }
+    }
+
+    fun importTree(treeUri: Uri, projectName: String): ProjectInfo {
+        val flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+        context.contentResolver.takePersistableUriPermission(treeUri, flags)
+        val project = createProject(projectName)
+        val root = projectDir(project.id)
+        val resolver = context.contentResolver
+        var fileCount = 0
+        var totalBytes = 0L
+        val skipped = setOf(".git", ".gradle", "build", ".idea", ".cxx", "node_modules", "__pycache__")
+
+        fun copyDirectory(documentId: String, relative: String, depth: Int) {
+            require(depth <= 24) { "目录层级超过 24 层，导入已停止" }
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
+            val projection = arrayOf(
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE
+            )
+            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeCol = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeCol = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+                while (cursor.moveToNext()) {
+                    val rawName = cursor.getString(nameCol) ?: continue
+                    if (rawName.startsWith(".") || rawName in skipped) continue
+                    val name = rawName.replace("/", "_").replace("\\", "_").trim()
+                    if (name.isBlank() || name == "." || name == "..") continue
+                    val childId = cursor.getString(idCol)
+                    val mime = cursor.getString(mimeCol) ?: "application/octet-stream"
+                    val rel = if (relative.isEmpty()) name else "$relative/$name"
+                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        copyDirectory(childId, rel, depth + 1)
+                    } else {
+                        fileCount++
+                        require(fileCount <= 2000) { "导入文件超过 2000 个，已停止" }
+                        val declared = if (sizeCol >= 0 && !cursor.isNull(sizeCol)) cursor.getLong(sizeCol) else -1L
+                        require(declared <= 25L * 1024 * 1024 || declared < 0) { "单文件超过 25 MB：$rel" }
+                        val source = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId)
+                        val target = resolve(root, rel)
+                        target.parentFile?.mkdirs()
+                        resolver.openInputStream(source)?.use { input ->
+                            target.outputStream().use { output ->
+                                val buffer = ByteArray(16 * 1024)
+                                while (true) {
+                                    val n = input.read(buffer)
+                                    if (n < 0) break
+                                    totalBytes += n
+                                    require(totalBytes <= 200L * 1024 * 1024) { "项目导入超过 200 MB，已停止" }
+                                    output.write(buffer, 0, n)
+                                }
+                            }
+                        } ?: error("无法读取文件：$rel")
+                    }
+                }
+            } ?: error("无法读取所选目录")
+        }
+
+        try {
+            copyDirectory(DocumentsContract.getTreeDocumentId(treeUri), "", 0)
+        } catch (e: Exception) {
+            // Keep the partial import visible and recoverable instead of deleting user data.
+            File(root, ".aifactory-import-error.txt").writeText(
+                "导入未完成：${e.message}\n已复制文件数：$fileCount\n已复制字节数：$totalBytes\n",
+                Charsets.UTF_8
+            )
+            throw e
+        }
+        return listProjects().first { it.id == project.id }
     }
 
     fun projectPath(projectId: String): File = projectDir(projectId)
