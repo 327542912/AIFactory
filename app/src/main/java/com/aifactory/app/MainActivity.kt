@@ -337,7 +337,9 @@ private fun ProjectsPage() {
     var busy by remember { mutableStateOf(false) }
     var editPath by remember { mutableStateOf("") }
     var editContent by remember { mutableStateOf("") }
+    var editProjectId by remember { mutableStateOf("") }
     var lastCheckpoint by remember { mutableStateOf("") }
+    var lastCheckpointProjectId by remember { mutableStateOf("") }
     var pendingProposalId by remember { mutableStateOf("") }
     var pendingChanges by remember { mutableStateOf(pendingStore.list()) }
     fun refresh() {
@@ -456,6 +458,7 @@ private fun ProjectsPage() {
                 items(current.files.take(40)) { path ->
                     TextButton(onClick = {
                         editPath = path
+                        editProjectId = current.project.id
                         runCatching { workspace.readFile(current.project.id, path) }
                             .onSuccess { editContent = it; output = "已载入：$path" }
                             .onFailure { editContent = ""; output = "读取失败：" + it.message }
@@ -478,14 +481,21 @@ private fun ProjectsPage() {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(enabled = editPath.isNotBlank(), onClick = {
+                    editProjectId = current.project.id
                     runCatching { workspace.readFile(current.project.id, editPath) }
                         .onSuccess { editContent = it; output = "读取成功。" }
                         .onFailure { output = "读取失败：" + it.message }
                 }) { Text("读取") }
                 Button(enabled = editPath.isNotBlank(), onClick = {
-                    runCatching { workspace.writeFile(current.project.id, editPath, editContent) }
+                    runCatching {
+                        require(editProjectId.isBlank() || editProjectId == current.project.id) {
+                            "当前编辑内容属于另一个项目，请切换回原项目后再保存。"
+                        }
+                        workspace.writeFile(current.project.id, editPath, editContent)
+                    }
                         .onSuccess {
                             lastCheckpoint = it
+                            lastCheckpointProjectId = current.project.id
                             if (pendingProposalId.isNotBlank()) {
                                 pendingStore.remove(pendingProposalId)
                                 pendingProposalId = ""
@@ -496,8 +506,13 @@ private fun ProjectsPage() {
                         .onFailure { output = "保存失败：" + it.message }
                 }) { Text("保存并创建检查点") }
                 OutlinedButton(enabled = lastCheckpoint.isNotBlank(), onClick = {
-                    runCatching { workspace.rollback(current.project.id, lastCheckpoint) }
-                        .onSuccess { refresh(); output = "已回滚检查点：$lastCheckpoint"; lastCheckpoint = "" }
+                    runCatching {
+                        require(lastCheckpointProjectId == current.project.id) {
+                            "该检查点属于另一个项目，请切换回对应项目后再回滚。"
+                        }
+                        workspace.rollback(current.project.id, lastCheckpoint)
+                    }
+                        .onSuccess { refresh(); output = "已回滚检查点：$lastCheckpoint"; lastCheckpoint = ""; lastCheckpointProjectId = "" }
                         .onFailure { output = "回滚失败：" + it.message }
                 }) { Text("回滚") }
             }
