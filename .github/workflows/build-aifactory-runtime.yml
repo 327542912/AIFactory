@@ -125,6 +125,38 @@ jobs:
           git diff --check
           git diff -- packages/ncurses/build.sh
 
+      - name: Patch unbound swig interface
+        working-directory: termux-packages
+        run: |
+          set -euo pipefail
+
+          P=packages/libunbound
+          B=$P/build.sh
+          grep -q -- '--with-pyunbound' "$B"
+          test ! -e "$P/unbound-swig-token.patch"
+
+          base64 -d > "$P/unbound-swig-token.patch" <<'B64'
+          LS0tIGEvbGlidW5ib3VuZC9weXRob24vbGlidW5ib3VuZC5pCTIwMjYtMTEtMjEgMjE6MTM6MjAuOTg4NjI1ODY5ICswODAwCisrKyBiL2xpYnVuYm91bmQvcHl0aG9uL2xpYnVuYm91bmQuaQkyMDI2LTExLTIxIDIxOjEzOjIxLjAzNTYyNjEzMyArMDgwMApAQCAtODQ5LDE1ICs4NDksMTMgQEAKICAgICAgICAgICAgICAKIH0KIAotJWV4Y2VwdGlvbiB1Yl9yZXNvbHZlCi0leyAKKyVleGNlcHRpb24gdWJfcmVzb2x2ZSB7CiAgIC8vcHJpbnRmKCJyZXNvbHZlX3N0YXJ0KCVsWClcbiIsKGxvbmcgdW5zaWduZWQgaW50KWFyZzEpOwogICBQeV9CRUdJTl9BTExPV19USFJFQURTIAotICAkZnVuY3Rpb24gCisgICRhY3Rpb24gCiAgIFB5X0VORF9BTExPV19USFJFQURTIAogICAvL3ByaW50ZigicmVzb2x2ZV9zdG9wKClcbiIpOwotJX0gCi0KK30KICVpbmNsdWRlICJsaWJ1bmJvdW5kL3VuYm91bmQuaCIKIAogJWlubGluZSAlewo=
+          B64
+
+          VER=$(sed -n 's/^TERMUX_PKG_VERSION="\(.*\)"/\1/p' "$B" | head -1)
+          echo "libunbound version: $VER"
+          [ -n "$VER" ]
+
+          W=$(mktemp -d)
+          mkdir -p "$W/libunbound/python"
+          curl -fsSL --retry 3 --max-time 90 \
+            "https://raw.githubusercontent.com/NLnetLabs/unbound/release-$VER/libunbound/python/libunbound.i" \
+            -o "$W/libunbound/python/libunbound.i"
+          grep -q '\$function' "$W/libunbound/python/libunbound.i"
+
+          patch -p1 -d "$W" < "$P/unbound-swig-token.patch"
+          grep -q '^  \$action' "$W/libunbound/python/libunbound.i"
+          ! grep -q '\$function' "$W/libunbound/python/libunbound.i"
+          echo "preflight OK"
+
+          echo "--- patch content ---"
+          cat "$P/unbound-swig-token.patch"
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /opt/hostedtoolcache/CodeQL || true
