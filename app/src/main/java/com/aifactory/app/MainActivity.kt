@@ -318,6 +318,13 @@ private fun ProjectsPage() {
     var editPath by remember { mutableStateOf("") }
     var editContent by remember { mutableStateOf("") }
     var lastCheckpoint by remember { mutableStateOf("") }
+    fun refresh() {
+        projects = workspace.listProjects()
+        selectedId?.let { id ->
+            scan = runCatching { workspace.scan(id) }.getOrNull()
+        }
+    }
+
     val projectTreePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -331,13 +338,6 @@ private fun ProjectsPage() {
                     output = "工程目录已复制到 AIFactory 私有工作区。"
                 }
                 .onFailure { output = "导入失败：" + it.message }
-        }
-    }
-
-    fun refresh() {
-        projects = workspace.listProjects()
-        selectedId?.let { id ->
-            scan = runCatching { workspace.scan(id) }.getOrNull()
         }
     }
 
