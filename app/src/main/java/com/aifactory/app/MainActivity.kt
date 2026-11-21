@@ -483,7 +483,7 @@ private fun TerminalPage(runCommand: suspend (String) -> String) {
     var result by remember {
         mutableStateOf(
             "AIFactory 独立 Shell 已接入。\n" +
-            "工作目录：AIFactory 私有 workspace"
+            "注意：当前执行器使用 /system/bin/sh，尚未安装独立 Linux 工具链。"
         )
     }
     var running by remember { mutableStateOf(false) }
@@ -501,7 +501,7 @@ private fun TerminalPage(runCommand: suspend (String) -> String) {
         )
 
         Text(
-            "独立本地 Shell · 不依赖 Termux App",
+            "应用私有工作目录 · Android 系统 Shell（非完整 Linux 环境）",
             color = Muted,
             fontSize = 12.sp
         )
