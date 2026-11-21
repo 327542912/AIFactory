@@ -9,7 +9,7 @@ Independent Android engineering-workbench prototype. All changes in this branch 
 - Project inventory and basic build-system detection for Gradle, Maven, CMake, Python and Node.js.
 - UTF-8 project file reader/editor with canonical-path containment checks, per-file size limits and before-write checkpoints.
 - Checkpoint rollback for individual file changes.
-- A constrained project build/test runner that does not invoke a shell and only accepts exact allowlisted command forms.
+- A constrained project build/test runner that does not evaluate free-form shell command strings and only accepts exact allowlisted command forms.
 - Persistent task DAG ledger with dependency-cycle validation, legal state transitions, event history and interrupted-task marking.
 - OpenAI-compatible tool-calling loop for listing projects, scanning project structure, reading bounded UTF-8 source files and proposing complete-file changes. Proposals are stored separately and require the user to load the full text into the editor and press Save before source is changed. Build/test tools are exposed only when the user enables the explicit opt-in.
 - Android CI workflow is configured to build a debug APK and upload it as an Actions artifact; the latest source revision is still awaiting a successful CI build.
@@ -44,5 +44,5 @@ APK output:
 - Model output is not executed as shell commands.
 - Project paths are canonicalized and constrained to the selected project root.
 - File writes create a checkpoint before replacing the target.
-- The build/test runner accepts a fixed set of command forms and does not pass command strings through a shell.
+- The build/test runner accepts a fixed set of command forms and does not evaluate free-form shell command strings; the Gradle wrapper is invoked with fixed arguments through Android's system shell.
 - Import and source editing operate on the app-private copy, not on the original source tree.
