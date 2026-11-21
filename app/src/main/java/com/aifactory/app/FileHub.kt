@@ -219,3 +219,42 @@ fun FileCenterPage(
         }
     }
 }
+
+/**
+ * Reads only recognized text/source formats for explicit chat submission.
+ * Binary files and oversized documents are never silently decoded as text.
+ */
+fun readTextAttachment(context: Context, file: FileRecord, maxBytes: Int = 96 * 1024): String {
+    val ext = file.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    val textExtensions = setOf(
+        "txt", "md", "markdown", "kt", "kts", "java", "xml", "json", "yaml", "yml",
+        "toml", "properties", "gradle", "py", "c", "cc", "cpp", "h", "hpp", "sh",
+        "bash", "js", "jsx", "ts", "tsx", "html", "css", "sql", "csv", "log", "cmake"
+    )
+    if (!file.mime.startsWith("text/") && ext !in textExtensions) {
+        return "[未解析文件：${file.name}；类型 ${file.mime}，当前仅支持文本/源码附件]"
+    }
+    if (file.size > maxBytes) {
+        return "[未读取文件：${file.name}；大小超过 ${maxBytes / 1024} KB 上限]"
+    }
+    return try {
+        val bytes = context.contentResolver.openInputStream(Uri.parse(file.uri))?.use { input ->
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                if (out.size() + n > maxBytes) {
+                    return "[未读取文件：${file.name}；实际内容超过 ${maxBytes / 1024} KB 上限]"
+                }
+                out.write(buffer, 0, n)
+            }
+            out.toByteArray()
+        } ?: return "[无法读取文件：${file.name}]"
+        val text = bytes.toString(Charsets.UTF_8)
+        if (text.contains('\u0000')) "[未读取文件：${file.name}；检测到二进制内容]"
+        else text
+    } catch (e: Exception) {
+        "[读取失败：${file.name}；${e.message}]"
+    }
+}
