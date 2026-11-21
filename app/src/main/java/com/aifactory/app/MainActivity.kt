@@ -186,6 +186,8 @@ private fun ChatPage(
     var showSettings by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var allowBuildTest by remember { mutableStateOf(false) }
+    val executionPolicy = remember(context) { AgentExecutionPolicy(context) }
+    var maxAgentRounds by remember { mutableIntStateOf(executionPolicy.maxRounds) }
     val scope = rememberCoroutineScope()
 
     Column(Modifier.fillMaxSize()) {
@@ -296,7 +298,15 @@ private fun ChatPage(
                     Checkbox(checked = allowBuildTest, onCheckedChange = { allowBuildTest = it })
                     Text("允许代理在本轮运行项目构建/测试命令", color = Muted, fontSize = 11.sp)
                 }
-                Text("代理可列出项目、扫描工程、读取源码；源码写入仍需在项目编辑器中人工确认。", Modifier.padding(start = 4.dp), color = Muted, fontSize = 10.sp)
+                Text("单次工程执行轮数：$maxAgentRounds（默认 50，最高 100）", color = Muted, fontSize = 11.sp)
+                Slider(
+                    value = maxAgentRounds.toFloat(),
+                    onValueChange = { maxAgentRounds = (it / 10f).toInt() * 10 },
+                    onValueChangeFinished = { executionPolicy.setMaxRounds(maxAgentRounds) },
+                    valueRange = 10f..100f,
+                    steps = 8
+                )
+                Text("每轮最多 10 次工具调用；连续重复同一调用 3 次会自动暂停。此预算只约束当前前台请求，不代表后台断点续跑或自动修复循环已经实现。", Modifier.padding(start = 4.dp), color = Muted, fontSize = 10.sp)
             }
         }
     }
