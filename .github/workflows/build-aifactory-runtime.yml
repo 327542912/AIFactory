@@ -157,6 +157,28 @@ jobs:
 
           echo "--- patch content ---"
           cat "$P/unbound-swig-token.patch"
+      - name: Fix docbook-xml download source
+        working-directory: termux-packages
+        run: |
+          set -euo pipefail
+          F=packages/docbook-xml/build.sh
+
+          sed -i 's#https://docbook.org/xml/#https://www.oasis-open.org/docbook/xml/#g' "$F"
+
+          N=$(grep -c '^\s*termux_download "https://www\.oasis-open\.org/docbook/xml/' "$F")
+          [ "$N" -eq 5 ] || { echo "ERROR: expected 5 termux_download urls, got $N" >&2; exit 1; }
+          ! grep -q 'termux_download "https://docbook\.org/xml/' "$F" || { echo "ERROR: docbook.org remains" >&2; exit 1; }
+          echo "docbook-xml: rewrote $N source urls"
+
+          for v in 4.1.2 4.2 4.3 4.4 4.5; do
+            if [ "$v" = "4.1.2" ]; then f=docbkx412.zip; else f=docbook-xml-$v.zip; fi
+            code=$(curl -sIL --retry 3 --max-time 25 -o /dev/null -w '%{http_code}' \
+              "https://www.oasis-open.org/docbook/xml/$v/$f")
+            echo "  $v -> $code"
+            [ "$code" = "200" ] || { echo "ERROR: $v unreachable ($code)" >&2; exit 1; }
+          done
+          echo "docbook-xml preflight OK"
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /opt/hostedtoolcache/CodeQL || true
