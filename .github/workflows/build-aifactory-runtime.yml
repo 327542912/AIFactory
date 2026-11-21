@@ -235,14 +235,14 @@ jobs:
           for p in $PKGS; do
             d="packages/$p"
             if [ ! -f "$d/build.sh" ]; then
-              sub=$(find packages -maxdepth 2 -name "$p.subpackage.sh" 2>/dev/null | head -1)
+              sub=$(find packages -maxdepth 2 -name "$p.subpackage.sh" 2>/dev/null | head -1 || true)
               if [ -n "$sub" ]; then d=$(dirname "$sub"); else printf '%-16s %-11s\n' "$p" "no-recipe"; continue; fi
             fi
             b="$d/build.sh"
-            sha=$(grep -m1 'TERMUX_PKG_SHA256' "$b" 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)
+            sha=$(grep -m1 'TERMUX_PKG_SHA256' "$b" 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1 || true)
             vars=$(mktemp)
             grep -E '^[A-Za-z_][A-Za-z0-9_]*=(("[^"]*")|('"'"'[^'"'"']*'"'"')|[^"'"'"' ]*)$' "$b" > "$vars" 2>/dev/null || true
-            url=$( set +eu; . "$vars" >/dev/null 2>&1; eval "echo ${TERMUX_PKG_SRCURL:-}" 2>/dev/null )
+            url=$( set +eu; . "$vars" >/dev/null 2>&1; eval "echo ${TERMUX_PKG_SRCURL:-}" 2>/dev/null || true )
             rm -f "$vars"
             if [ -z "$url" ] || [ "$url" = "" ]; then printf '%-16s %-11s\n' "$p" "no-SRCURL"; continue; fi
             case "$url" in *'$'*) printf '%-16s %-11s %s\n' "$p" "unexpanded" "$url"; continue;; esac
