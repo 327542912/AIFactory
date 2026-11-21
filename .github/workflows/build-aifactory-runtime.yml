@@ -71,26 +71,47 @@ jobs:
               )
               s, n = pattern.subn(")", s)
               if n != 1:
-                  raise SystemExit(
-                      f"Expected one foot {var} array entry, found {n}"
-                  )
+                  raise SystemExit(f"{var}: expected 1 foot entry, found {n}")
 
-          removals = [
-              '    cp "$TERMUX_PKG_TMPDIR"/full-terminfo/f/foot{,+base,-direct} "$TI/f/"',
-              "    sed 's/@default_terminfo@/foot/g' \"$TERMUX_PKG_SRCDIR/foot/foot.info\" | \\\\",
-              "    tic -x -e foot,foot-direct -o \"$TI\" -",
+          lines = s.splitlines()
+          foot_cp = [
+              line for line in lines
+              if "full-terminfo/f/foot" in line and "cp " in line
+          ]
+          if len(foot_cp) != 1:
+              raise SystemExit(
+                  "foot terminfo cp line count mismatch: "
+                  + repr(foot_cp)
+              )
+          s = "\n".join(
+              line for line in lines if line != foot_cp[0]
+          ) + "\n"
+
+          lines = s.splitlines()
+          foot_sed = [
+              line for line in lines
+              if "foot/foot.info" in line and "sed " in line
+          ]
+          foot_tic = [
+              line for line in lines
+              if "tic -x -e foot,foot-direct" in line
           ]
 
-          for line in removals:
-              if s.count(line) != 1:
-                  raise SystemExit(f"Expected exactly one line: {line}")
-              s = s.replace(line + "\n", "")
+          if len(foot_sed) != 1 or len(foot_tic) != 1:
+              raise SystemExit(
+                  f"foot sed/tic mismatch: {foot_sed!r}, {foot_tic!r}"
+              )
+
+          s = "\n".join(
+              line for line in lines
+              if line not in (foot_sed[0], foot_tic[0])
+          ) + "\n"
 
           if "x11-packages/foot/build.sh" in s or "foot/foot.info" in s:
               raise SystemExit("Foot source reference remains")
 
           p.write_text(s)
-          print("Removed optional foot terminfo source; SHA-256 checks remain enabled.")
+          print("Foot optional source removed; SHA-256 checks preserved.")
           PY
 
           git diff --check
