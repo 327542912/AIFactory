@@ -187,6 +187,24 @@ jobs:
           done
           echo "docbook-xml preflight OK"
 
+      - name: Drop command-not-found from bootstrap list
+        run: |
+          set -euo pipefail
+          cd termux-packages
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("scripts/build-bootstraps.sh")
+          src = p.read_text()
+          target = 'PACKAGES_LIST+=("command-not-found")'
+          note = ':  # AIFactory: generate-db.js 按官方 com.termux 的 Contents 索引反查包名，改包名后必然失配'
+          if target in src:
+              src = src.replace(target, note)
+              p.write_text(src)
+          assert target not in p.read_text(), "patch failed"
+          print("patched: command-not-found dropped from bootstrap package list")
+          PY
+          grep -n 'command-not-found' scripts/build-bootstraps.sh || echo "no remaining reference"
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /opt/hostedtoolcache/CodeQL || true
