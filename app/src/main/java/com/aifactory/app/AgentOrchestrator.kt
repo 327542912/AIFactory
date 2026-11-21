@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 class AgentOrchestrator(private val context: Context) {
     private val workspace = EngineeringWorkspace(context)
     private val commandRunner = ProjectCommandRunner()
+    private val pendingChanges = PendingChangeStore(context)
 
     suspend fun respond(
         baseUrl: String,
@@ -130,6 +131,16 @@ class AgentOrchestrator(private val context: Context) {
                 JSONObject().put("ok", true).put("path", args.getString("path"))
                     .put("content", value).toString()
             }
+            "propose_file_change" -> {
+                val projectId = args.getString("project_id")
+                val path = workspace.validateRelativePath(projectId, args.getString("path"))
+                val proposal = pendingChanges.add(
+                    projectId, path, args.getString("content"), args.optString("reason")
+                )
+                JSONObject().put("ok", true).put("approval_required", true)
+                    .put("proposal_id", proposal.id).put("path", proposal.path)
+                    .put("message", "修改建议已保存为待审批项；没有写入源码。请用户到项目页面审阅并明确应用。").toString()
+            }
             "build_project", "test_project" -> {
                 if (!allowBuildTest) {
                     JSONObject().put("ok", false)
@@ -160,6 +171,15 @@ class AgentOrchestrator(private val context: Context) {
                 .put("project_id", property("string", "项目 ID"))
                 .put("path", property("string", "项目相对文件路径")))
             .put("required", JSONArray().put("project_id").put("path"))
+            .put("additionalProperties", false)))
+        tools.put(tool("propose_file_change", "提出完整文件内容替换建议。只保存为待审批项，不会直接写入源码。", JSONObject()
+            .put("type", "object")
+            .put("properties", JSONObject()
+                .put("project_id", property("string", "项目 ID"))
+                .put("path", property("string", "项目相对文件路径"))
+                .put("content", property("string", "建议写入的完整 UTF-8 文件内容"))
+                .put("reason", property("string", "修改理由")))
+            .put("required", JSONArray().put("project_id").put("path").put("content").put("reason"))
             .put("additionalProperties", false)))
         tools.put(tool("build_project", "运行识别出的项目构建命令。只能在用户明确启用构建/测试权限后执行。", schema(
             "project_id", "string", "项目 ID", true
