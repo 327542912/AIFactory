@@ -1,0 +1,76 @@
+name: Build AIFactory ARM64 Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/build-aifactory-runtime.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout AIFactory
+        uses: actions/checkout@v4
+
+      - name: Checkout Termux build system
+        uses: actions/checkout@v4
+        with:
+          repository: agnostic-apollo/termux-packages
+          ref: infra-improvs
+          path: termux-packages
+
+      - name: Configure AIFactory package identity
+        run: |
+          cd termux-packages
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          p = Path("scripts/properties.sh")
+          s = p.read_text()
+          keys = ("TERMUX_APP__PACKAGE_NAME", "TERMUX_APP_PACKAGE")
+          changed = 0
+
+          for key in keys:
+              pattern = rf'(?m)^(\s*{key}\s*=\s*).*$'
+              s, n = re.subn(
+                  pattern,
+                  lambda m: m.group(1) + '"com.aifactory.app"',
+                  s
+              )
+              changed += n
+
+          if not changed:
+              raise SystemExit("ERROR: package identity variable not found")
+
+          p.write_text(s)
+          print("AIFactory package identity configured.")
+          PY
+
+          grep -nE 'TERMUX_APP(_|__)?PACKAGE' scripts/properties.sh
+
+      - name: Build ARM64 bootstrap
+        run: |
+          cd termux-packages
+          ./scripts/run-docker.sh \
+            ./scripts/build-bootstraps.sh \
+            --android10 \
+            --architectures aarch64
+
+      - name: Verify bootstrap
+        run: |
+          test -s termux-packages/bootstrap-aarch64.zip
+          ls -lh termux-packages/bootstrap-aarch64.zip
+          sha256sum termux-packages/bootstrap-aarch64.zip
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aifactory-runtime-aarch64
+          path: termux-packages/bootstrap-aarch64.zip
+          if-no-files-found: error
+          retention-days: 14
