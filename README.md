@@ -10,7 +10,7 @@ Independent Android engineering-workbench prototype. All changes in this branch 
 - UTF-8 project file reader/editor with canonical-path containment checks, per-file size limits and before-write checkpoints.
 - Checkpoint rollback for individual file changes.
 - A constrained project build/test runner that does not evaluate free-form shell command strings and only accepts exact allowlisted command forms.
-- Persistent task DAG ledger with dependency-cycle validation, legal state transitions, event history and interrupted-task marking.
+- Persistent task DAG ledger with dependency-cycle validation, legal state transitions, event history and interrupted-task marking; the model can create plans and query task status through tools.
 - OpenAI-compatible tool-calling loop for listing projects, scanning project structure, reading bounded UTF-8 source files and proposing complete-file changes. Proposals are stored separately and require the user to load the full text into the editor and press Save before source is changed. Build/test tools are exposed only when the user enables the explicit opt-in.
 - Android CI workflow is configured to build a debug APK and upload it as an Actions artifact; the latest source revision is still awaiting a successful CI build.
 
@@ -21,7 +21,7 @@ This is **not yet a complete autonomous coding agent** and must not be described
 - The current terminal uses Android `/system/bin/sh`; the app-private runtime folders are not a Linux distribution.
 - No embedded Linux rootfs, package manager, JDK, Gradle distribution, Python, Node.js, CMake or compiler toolchain is bundled.
 - Project build/test execution therefore succeeds only if the required executable is already available to the Android app process and the project wrapper is executable. A normal Termux installation is not automatically visible to this app.
-- The task DAG persistence layer is implemented but is not yet connected to a model-driven planner/executor loop.
+- The model-driven planner can persist and query task DAGs, but the DAG is not yet a fully automated task executor and does not guarantee task continuation after process death.
 - The agent can inspect projects through structured tool calls, submit complete-file change proposals for human approval, and optionally invoke the fixed build/test runner. It still has no unattended patch application or failure-repair loop; each proposed file must be reviewed and saved by the user in the checkpointed editor.
 - Text/source attachments are read with per-file and total size caps when explicitly sent; images, PDF and Office content are not yet parsed.
 - The app does not yet provide a foreground task service, reliable process continuation after Android kills the app, multi-agent orchestration, plugin sandboxing, encrypted credential vault, APK signing/release workflow or self-update.
