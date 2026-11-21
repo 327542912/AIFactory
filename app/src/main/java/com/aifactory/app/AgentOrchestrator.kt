@@ -28,14 +28,20 @@ class AgentOrchestrator(private val context: Context) {
     ): String {
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content",
-            "你是 AIFactory 工程代理。先列出项目，再扫描并按需读取源码。用户要求工程计划时，使用 create_task_plan 保存带依赖的任务 DAG；用户询问进度时，使用 get_task_status。只能通过已注册工具检查项目；不要声称执行过未执行的操作。不要猜测项目 ID。未经用户明确授权不得构建或测试。如需修改源码，必须调用 propose_file_change 提交完整文件建议；该工具只创建待审批项，绝不直接写入。明确告诉用户到项目页面载入全文审阅并手动保存后才会应用。"))
+            "你是 AIFactory 工程代理。单次执行默认最多 50 轮（用户可调至 100 轮），每轮最多 10 个工具调用；不要重复相同工具调用，必须根据上次结果推进。先列出项目，再扫描并按需读取源码。用户要求工程计划时，使用 create_task_plan 保存带依赖的任务 DAG；用户询问进度时，使用 get_task_status。只能通过已注册工具检查项目；不要声称执行过未执行的操作。不要猜测项目 ID。未经用户明确授权不得构建或测试。如需修改源码，必须调用 propose_file_change 提交完整文件建议；该工具只创建待审批项，绝不直接写入。明确告诉用户到项目页面载入全文审阅并手动保存后才会应用。"))
         history.forEach { item ->
             messages.put(JSONObject().put("role", item.role).put("content", item.text))
         }
         val tools = toolDefinitions()
+        val policy = AgentExecutionPolicy(context)
+        val maxRounds = policy.maxRounds
         var toolCount = 0
+        var roundCount = 0
+        var lastToolSignature = ""
+        var repeatedToolSignatureCount = 0
 
-        repeat(6) {
+        repeat(maxRounds) {
+            roundCount++
             val response = withContext(Dispatchers.IO) {
                 postChat(baseUrl, model, apiKey, messages, tools)
             }
@@ -50,14 +56,26 @@ class AgentOrchestrator(private val context: Context) {
             }
 
             messages.put(assistant)
+            if (calls.length() > policy.maxToolCallsPerRound) {
+                return "模型单轮请求了 ${calls.length()} 个工具，超过每轮 ${policy.maxToolCallsPerRound} 次上限。已安全停止；请缩小本轮操作范围。"
+            }
             for (i in 0 until calls.length()) {
-                if (++toolCount > 12) return "已达到本轮工具调用上限（12 次），请缩小任务范围。"
+                toolCount++
                 val call = calls.getJSONObject(i)
                 val callId = call.optString("id")
                 val fn = call.optJSONObject("function") ?: JSONObject()
                 val name = fn.optString("name")
                 val args = try { JSONObject(fn.optString("arguments", "{}")) }
                     catch (_: Exception) { JSONObject() }
+                val signature = "$name:${args.toString()}"
+                if (signature == lastToolSignature) repeatedToolSignatureCount++ else {
+                    lastToolSignature = signature
+                    repeatedToolSignatureCount = 1
+                }
+                if (repeatedToolSignatureCount >= policy.maxRepeatedIdenticalToolCalls) {
+                    policy.recordCompletedExecution(roundCount, toolCount, "REPEATED_TOOL_CALL")
+                    return "检测到模型连续 ${repeatedToolSignatureCount} 次重复同一工具调用（$name），为避免无限循环已暂停。已完成 $roundCount/$maxRounds 轮、$toolCount 次工具调用。"
+                }
                 val result = try {
                     executeTool(name, args, allowBuildTest)
                 } catch (e: Exception) {
@@ -70,7 +88,8 @@ class AgentOrchestrator(private val context: Context) {
                 )
             }
         }
-        return "已达到最多 6 轮模型工具调用限制。当前工具结果已保留，请继续指定下一步。"
+        policy.recordCompletedExecution(roundCount, toolCount, "ROUND_BUDGET_REACHED")
+        return "已达到本任务本次执行预算：$roundCount/$maxRounds 轮模型响应、$toolCount 次工具调用。当前对话内的工具结果已保留；本轮已安全停止。可继续发送消息开展下一阶段。"
     }
 
     private fun postChat(
