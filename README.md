@@ -5,13 +5,13 @@ Independent Android engineering-workbench prototype. All changes in this branch 
 ## Current implementation in this branch
 
 - Jetpack Compose Android application with chat, project, file, terminal, plugin and settings pages.
-- Android Storage Access Framework directory import into the app-private project workspace. Import is bounded (2,000 files, 25 MB per file, 200 MB total, 24 directory levels); common generated folders and hidden entries are skipped.
+- Android Storage Access Framework directory import into the app-private project workspace. Import is bounded (2,000 files, 25 MB per file, 200 MB total, 24 directory levels); common generated folders and `.DS_Store` entries are skipped; project dotfiles such as `.github` and `.gitignore` are preserved.
 - Project inventory and basic build-system detection for Gradle, Maven, CMake, Python and Node.js.
 - UTF-8 project file reader/editor with canonical-path containment checks, per-file size limits and before-write checkpoints.
 - Checkpoint rollback for individual file changes.
 - A constrained project build/test runner that does not invoke a shell and only accepts exact allowlisted command forms.
 - Persistent task DAG ledger with dependency-cycle validation, legal state transitions, event history and interrupted-task marking.\n- OpenAI-compatible tool-calling loop for listing projects, scanning project structure, reading bounded UTF-8 source files and proposing complete-file changes. Proposals are stored separately and require the user to load the full text into the editor and press Save before source is changed. Build/test tools are exposed only when the user enables the explicit opt-in.
-- Android CI workflow builds a debug APK and uploads it as an Actions artifact.
+- Android CI workflow is configured to build a debug APK and upload it as an Actions artifact; the latest source revision is still awaiting a successful CI build.
 
 ## Important runtime limitations
 
