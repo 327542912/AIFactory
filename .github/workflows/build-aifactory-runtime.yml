@@ -282,10 +282,28 @@ jobs:
           # AIFactory 使用 targetSdk 28 直接 execve，需要标准 bootstrap。
           ARGS=(--architectures aarch64)
           if [ -n "$EXTRA_PACKAGES" ]; then ARGS+=(--packages-post-additional "$EXTRA_PACKAGES"); fi
+          # 上游 run-docker.sh / build-bootstraps.sh 的 EXIT trap 会把「已经成功打印
+          # Finished successfully」的构建翻成退出码 1（已核对上游 run-docker.sh 的
+          # docker__run_docker_exec_trap 与 build_bootstrap_trap）。所以这里不看退出码，
+          # 只以「zip 是否真的落盘」为准，避免产物随退出码一起被扔掉。
+          set +e
           ./scripts/run-docker.sh ./scripts/build-bootstraps.sh "${ARGS[@]}"
+          RC=$?
+          set -e
+          echo "build-bootstraps.sh rc=$RC"
+          ZIP=output/bootstrap-aarch64.zip
+          if [ ! -f "$ZIP" ]; then
+            echo "::error::bootstrap-aarch64.zip 不存在，构建真失败 (rc=$RC)"
+            ls -la output 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning::rc=$RC，但 zip 已生成，按成功处理"
+          fi
+          ls -lh "$ZIP"
+          unzip -t "$ZIP" | tail -2
 
       - name: Locate bootstrap
-        if: success()
         working-directory: .
         run: |
           set -x
@@ -303,9 +321,26 @@ jobs:
 
       - name: Verify bootstrap
         run: |
-          test -s termux-packages/bootstrap-aarch64.zip
-          ls -lh termux-packages/bootstrap-aarch64.zip
-          sha256sum termux-packages/bootstrap-aarch64.zip
+          set -e
+          ZIP=termux-packages/bootstrap-aarch64.zip
+          test -s "$ZIP"
+          ls -lh "$ZIP"
+          sha256sum "$ZIP"
+          echo "entries: $(unzip -l "$ZIP" | tail -1)"
+          unzip -t "$ZIP" | tail -2
+          # 前缀核验：bash 是整棵树里最该带新前缀的二进制之一
+          rm -rf pfxprobe && mkdir -p pfxprobe
+          unzip -q "$ZIP" 'bin/bash' -d pfxprobe || unzip -q "$ZIP" -d pfxprobe
+          if [ -f pfxprobe/bin/bash ]; then
+            A=$(strings pfxprobe/bin/bash | grep -c 'data/data/com.aifactory.app/files/usr' || true)
+            T=$(strings pfxprobe/bin/bash | grep -c 'data/data/com.termux/files/usr' || true)
+            echo "bash: aifactory-prefix=$A termux-prefix=$T"
+            if [ "$A" -eq 0 ]; then echo "::error::bash 里没有 com.aifactory.app 前缀，重编前缀没生效"; exit 1; fi
+            if [ "$T" -ne 0 ]; then echo "::warning::bash 里仍残留 com.termux 前缀 $T 处"; fi
+          else
+            echo "::warning::没解出 bin/bash，跳过前缀核验"
+          fi
+          rm -rf pfxprobe
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4
