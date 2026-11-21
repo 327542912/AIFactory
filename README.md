@@ -1,52 +1,46 @@
-# AIFactory 0.1.0
+# AIFactory Engineering Workbench
 
-A new, independent Android AI development workspace. It does not modify the existing EdgeCluster project.
+Independent Android engineering-workbench prototype. All changes in this branch are isolated from `main` and from the separate EdgeCluster project.
 
-## Included in this scaffold
-- Kotlin + Jetpack Compose hybrid workspace UI
-- Light/dark theme toggle
-- Chat UI with configurable OpenAI-compatible `/chat/completions` endpoint
-- Project, Terminal, Plugins and Settings pages
-- Initial Termux RUN_COMMAND dispatch bridge
+## Current implementation in this branch
 
-## Build in Termux
+- Jetpack Compose Android application with chat, project, file, terminal, plugin and settings pages.
+- Android Storage Access Framework directory import into the app-private project workspace. Import is bounded (2,000 files, 25 MB per file, 200 MB total, 24 directory levels); common generated folders and hidden entries are skipped.
+- Project inventory and basic build-system detection for Gradle, Maven, CMake, Python and Node.js.
+- UTF-8 project file reader/editor with canonical-path containment checks, per-file size limits and before-write checkpoints.
+- Checkpoint rollback for individual file changes.
+- A constrained project build/test runner that does not invoke a shell and only accepts exact allowlisted command forms.
+- Persistent task DAG ledger with dependency-cycle validation, legal state transitions, event history and interrupted-task marking.
+- Android CI workflow builds a debug APK and uploads it as an Actions artifact.
 
-Extract the project to `~/AIFactory`, then run:
+## Important runtime limitations
+
+This is **not yet a complete autonomous coding agent** and must not be described as one.
+
+- The current terminal uses Android `/system/bin/sh`; the app-private runtime folders are not a Linux distribution.
+- No embedded Linux rootfs, package manager, JDK, Gradle distribution, Python, Node.js, CMake or compiler toolchain is bundled.
+- Project build/test execution therefore succeeds only if the required executable is already available to the Android app process and the project wrapper is executable. A normal Termux installation is not automatically visible to this app.
+- The task DAG persistence layer is implemented but is not yet connected to a model-driven planner/executor loop.
+- Chat still sends ordinary OpenAI-compatible chat-completion requests; it does not yet consume structured tool calls or safely run model-generated edit/build/repair plans.
+- The app does not yet provide a foreground task service, reliable process continuation after Android kills the app, multi-agent orchestration, plugin sandboxing, encrypted credential vault, APK signing/release workflow or self-update.
+- The imported project is a copy inside the app's private storage. It does not modify the original selected directory.
+
+## Build
+
+The branch CI workflow uses JDK 21, Android SDK platform 34 and Gradle 8.7:
 
 ```bash
-cd ~/AIFactory
-gradle assembleDebug --no-daemon
+gradle assembleDebug --no-daemon --max-workers=2
 ```
 
-APK output: `app/build/outputs/apk/debug/app-debug.apk`
+APK output:
 
-Install it with:
+`app/build/outputs/apk/debug/app-debug.apk`
 
-```bash
-termux-open app/build/outputs/apk/debug/app-debug.apk
-```
+## Safety notes
 
-## Termux setup
-
-In Termux:
-
-```bash
-mkdir -p ~/.termux
-printf '\nallow-external-apps = true\n' >> ~/.termux/termux.properties
-```
-
-Restart Termux. Grant AIFactory the Termux RUN_COMMAND permission when Android presents it. Only authorize apps you trust.
-
-Official interface reference: https://github.com/termux/termux-app/wiki/RUN_COMMAND-Intent
-
-## Current limitations
-- The bridge dispatches commands but does not yet stream stdout/stderr back into the app.
-- API credentials are held in memory only and are not persisted. Do not use this scaffold on a shared device with sensitive credentials.
-- This version is a functional UI/model-chat/command-dispatch scaffold, not yet a complete autonomous coding agent. Task DAG, constrained file tools, output streaming, build/test/repair loop, Git rollback, encrypted credential storage, plugin isolation, and self-update workflow remain to be implemented.
-- Self-updating the host APK must use Android's package installer and user confirmation; silent self-replacement is not supported.
-
-## Build versions
-- compileSdk 34 / targetSdk 34 / minSdk 26
-- Android Gradle Plugin 8.6.1
-- Kotlin 2.0.21
-- Intended for Gradle 8.7 and JDK 21
+- Model output is not executed as shell commands.
+- Project paths are canonicalized and constrained to the selected project root.
+- File writes create a checkpoint before replacing the target.
+- The build/test runner accepts a fixed set of command forms and does not pass command strings through a shell.
+- Import and source editing operate on the app-private copy, not on the original source tree.
