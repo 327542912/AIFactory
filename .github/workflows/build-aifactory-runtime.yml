@@ -53,6 +53,11 @@ jobs:
 
           grep -nE 'TERMUX_APP(_|__)?PACKAGE' scripts/properties.sh
 
+      - name: Build matching Android NDK Docker image
+        working-directory: termux-packages
+        run: |
+          docker build -t ghcr.io/termux/package-builder ./scripts
+
       - name: Build ARM64 bootstrap
         run: |
           cd termux-packages
