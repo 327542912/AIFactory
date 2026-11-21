@@ -217,39 +217,49 @@ jobs:
           grep -n 'TERMUX_PKG_SRCURL=' packages/dos2unix/build.sh packages/nano/build.sh
 
       - name: Preflight verify source hashes
+        env:
+          EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages || 'openjdk-21,gradle,apksigner,git,zip,unzip' }}
+          REPO_PACKAGES: ${{ github.event.inputs.repo_packages || '' }}
         run: |
           set -uo pipefail
           cd termux-packages
-          printf '%-16s %-12s %s\n' PACKAGE RESULT URL
+          # 传 "none" 表示不打包（空字符串在 GitHub 表达式里会回落到默认值）
+          if [ "${EXTRA_PACKAGES:-}" = "none" ]; then EXTRA_PACKAGES=""; fi
+          if [ "${REPO_PACKAGES:-}" = "none" ]; then REPO_PACKAGES=""; fi
+          printf '%-16s %-11s %s\n' PACKAGE RESULT URL
           fail=0
-          for p in bash bzip2 coreutils curl dash diffutils findutils gawk grep gzip less procps psmisc sed tar \
-                   termux-core termux-exec termux-keyring termux-tools util-linux xz-utils apt gpgv \
-                   ed debianutils dos2unix inetutils lsof nano net-tools patch unzip \
-                   openjdk-21 gradle apksigner git zip; do
+          PKGS="bash bzip2 coreutils curl dash diffutils findutils gawk grep gzip less procps psmisc sed tar \
+                termux-core termux-exec termux-keyring termux-tools util-linux xz-utils apt gpgv \
+                ed debianutils dos2unix inetutils lsof nano net-tools patch unzip"
+          for e in ${EXTRA_PACKAGES:-} ${REPO_PACKAGES:-}; do if [ -n "$e" ]; then PKGS="$PKGS $(echo "$e" | tr ',' ' ')"; fi; done
+          for p in $PKGS; do
             d="packages/$p"
             if [ ! -f "$d/build.sh" ]; then
               sub=$(find packages -maxdepth 2 -name "$p.subpackage.sh" 2>/dev/null | head -1)
-              [ -n "$sub" ] && d=$(dirname "$sub") || { printf '%-16s %-12s\n' "$p" "no-recipe"; continue; }
+              if [ -n "$sub" ]; then d=$(dirname "$sub"); else printf '%-16s %-11s\n' "$p" "no-recipe"; continue; fi
             fi
             b="$d/build.sh"
-            ver=$(sed -nE 's/^TERMUX_PKG_VERSION=["'\'']?([^"'\'' ]+).*/\1/p' "$b" | head -1)
-            url=$(sed -nE 's/^TERMUX_PKG_SRCURL=["'\'']?([^"'\'' ]+).*/\1/p' "$b" | head -1)
-            sha=$(sed -nE 's/^TERMUX_PKG_SHA256=["'\'']?([0-9a-f]{64}).*/\1/p' "$b" | head -1)
-            if [ -z "$url" ]; then printf '%-16s %-12s\n' "$p" "no-SRCURL"; continue; fi
-            url=$(TERMUX_PKG_VERSION="$ver" eval "echo $url" 2>/dev/null)
+            sha=$(grep -m1 'TERMUX_PKG_SHA256' "$b" 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1)
+            vars=$(mktemp)
+            grep -E '^[A-Za-z_][A-Za-z0-9_]*=(("[^"]*")|('"'"'[^'"'"']*'"'"')|[^"'"'"' ]*)$' "$b" > "$vars" 2>/dev/null || true
+            url=$( set +eu; . "$vars" >/dev/null 2>&1; eval "echo ${TERMUX_PKG_SRCURL:-}" 2>/dev/null )
+            rm -f "$vars"
+            if [ -z "$url" ] || [ "$url" = "" ]; then printf '%-16s %-11s\n' "$p" "no-SRCURL"; continue; fi
+            case "$url" in *'$'*) printf '%-16s %-11s %s\n' "$p" "unexpanded" "$url"; continue;; esac
             code=$(curl -fL --retry 3 --retry-delay 2 --retry-all-errors --max-time 150 -s -o /tmp/_pf "$url" -w '%{http_code}' 2>/dev/null || echo ERR)
             case "$code" in
               200) ;;
-              404|410) printf '%-16s %-12s %s\n' "$p" "DEAD($code)" "$url"; fail=1; continue ;;
-              *)       printf '%-16s %-12s %s\n' "$p" "WARN($code)" "$url"; continue ;;
+              404|410) printf '%-16s %-11s %s\n' "$p" "DEAD($code)" "$url"; fail=1; continue ;;
+              *) printf '%-16s %-11s %s\n' "$p" "WARN($code)" "$url"; continue ;;
             esac
             got=$(sha256sum /tmp/_pf | cut -d' ' -f1)
-            if [ -z "$sha" ]; then printf '%-16s %-12s %s\n' "$p" "OK(no-sha)" "$url"
-            elif [ "$got" = "$sha" ]; then printf '%-16s %-12s %s\n' "$p" "OK" "$url"
-            else printf '%-16s %-12s %s\n' "$p" "HASH-DIFF" "$url"; fail=1; fi
+            if [ -z "$sha" ]; then printf '%-16s %-11s %s\n' "$p" "OK(no-sha)" "$url"
+            elif [ "$got" = "$sha" ]; then printf '%-16s %-11s %s\n' "$p" "OK" "$url"
+            else printf '%-16s %-11s %s\n' "$p" "HASH-DIFF" "$url"; fail=1; fi
           done
-          if [ "$fail" -ne 0 ]; then echo "::error::source preflight failed - 死链或哈希不符，编译前拦下"; exit 1; fi
+          if [ "$fail" -ne 0 ]; then echo "::error::source preflight failed"; exit 1; fi
           echo "preflight OK"
+          exit $fail
 
       - name: Free disk space
         run: |
@@ -266,6 +276,7 @@ jobs:
           EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages || 'openjdk-21,gradle,apksigner,git,zip,unzip' }}
         run: |
           cd termux-packages
+          if [ "${EXTRA_PACKAGES:-}" = "none" ]; then EXTRA_PACKAGES=""; fi
           # 注意：不能加 --android10。该模式生成的是「APK 打包系统」bootstrap：
           # 没有 apt/dpkg、改用 proot，只适用于 targetSdk>=29。
           # AIFactory 使用 targetSdk 28 直接 execve，需要标准 bootstrap。
@@ -322,7 +333,8 @@ jobs:
         env:
           REPO_PACKAGES: ${{ github.event.inputs.repo_packages || 'python,nodejs,curl,wget,jq,ripgrep,nano,make' }}
         run: |
-          if [ -z "${REPO_PACKAGES:-}" ]; then echo "repo_packages empty, skip"; exit 0; fi
+          if [ "${REPO_PACKAGES:-}" = "none" ]; then REPO_PACKAGES=""; fi
+          if [ -z "${REPO_PACKAGES:-}" ]; then echo "repo_packages=none, skip apt repo build"; exit 0; fi
           cd termux-packages
           ./scripts/run-docker.sh ./build-package.sh -a aarch64 $(echo "$REPO_PACKAGES" | tr ',' ' ')
 
