@@ -446,6 +446,12 @@ private fun ProjectsPage() {
                                 }) { Text("载入全文审阅") }
                                 OutlinedButton(onClick = {
                                     pendingStore.remove(proposal.id)
+                                    if (pendingProposalId == proposal.id) {
+                                        pendingProposalId = ""
+                                        editPath = ""
+                                        editContent = ""
+                                        editProjectId = ""
+                                    }
                                     refresh()
                                     output = "已拒绝修改建议。"
                                 }) { Text("拒绝") }
