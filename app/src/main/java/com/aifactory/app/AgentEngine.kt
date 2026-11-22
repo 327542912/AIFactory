@@ -126,8 +126,13 @@ class AgentEngine(private val ctx: Context) {
 
     // ---------- 主循环 ----------
 
-    suspend fun run(userText: String, cfg: AppConfig, onEvent: (String) -> Unit): String {
+    suspend fun run(userText: String, cfg: AppConfig, prior: List<Pair<String, String>> = emptyList(), onEvent: (String) -> Unit): String {
         suspend fun emit(s: String) = withContext(Dispatchers.Main) { onEvent(s) }
+        // 只继承本会话的最近几条，换主题就新建会话，互不污染
+        prior.takeLast(8).forEach { (role, text) ->
+            history.put(JSONObject().put("role", if (role == "assistant") "assistant" else "user")
+                .put("content", text.take(1500)))
+        }
         history.put(JSONObject().put("role", "user").put("content", userText))
         val limit = cfg.maxSteps.coerceAtLeast(1)
         var steps = 0; var toolCalls = 0; var requests = 0

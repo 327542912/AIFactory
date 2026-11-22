@@ -13,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -189,7 +190,9 @@ private fun ChatPage(
     var apiKey by remember { mutableStateOf(cfg.apiKey) }
     var maxSteps by remember { mutableStateOf(cfg.maxSteps.toString()) }
     var showSettings by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
     val busy = ChatRunner.busy
+    val sessionList = ChatRunner.sessions
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -199,8 +202,29 @@ private fun ChatPage(
                 Text("AI 工程师", fontWeight = FontWeight.SemiBold)
                 Text(if (apiKey.isBlank()) "模型尚未配置" else "模型：$model", color = Muted, fontSize = 11.sp)
             }
+            TextButton(onClick = { ChatRunner.newChat(ctx.applicationContext) }) { Text("＋ 新对话") }
+            TextButton(onClick = { showHistory = !showHistory }) { Text("历史") }
             TextButton(onClick = { agentMode = !agentMode }) { Text(if (agentMode) "Agent：开" else "Agent：关") }
             TextButton(onClick = { showSettings = !showSettings }) { Text("模型设置") }
+        }
+        if (showHistory) {
+            Card(Modifier.fillMaxWidth().padding(horizontal = 14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("历史对话（每个会话独立上下文，换主题请新建）", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    if (sessionList.isEmpty()) Text("还没有会话。", color = Muted, fontSize = 11.sp)
+                    sessionList.take(20).forEach { m ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                (if (m.id == ChatRunner.currentId) "● " else "") + m.title,
+                                Modifier.weight(1f).clickable { ChatRunner.switchTo(ctx.applicationContext, m.id); showHistory = false },
+                                fontSize = 12.sp, maxLines = 1
+                            )
+                            Text(android.text.format.DateFormat.format("MM-dd HH:mm", m.updated).toString(), color = Muted, fontSize = 10.sp)
+                            TextButton(enabled = m.id != ChatRunner.currentId && !busy, onClick = { ChatRunner.delete(ctx.applicationContext, m.id) }) { Text("删除", fontSize = 10.sp) }
+                        }
+                    }
+                }
+            }
         }
         if (showSettings) {
             Card(Modifier.fillMaxWidth().padding(horizontal = 14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {

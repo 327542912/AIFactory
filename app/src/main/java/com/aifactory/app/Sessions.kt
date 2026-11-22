@@ -26,10 +26,15 @@ import java.io.File
  * 现在状态挂在进程级对象上，页面只是视图；聊天记录还会落盘到 home/.aifactory/chat.json，重启也在。
  */
 
+internal data class SessionMeta(val id: String, val title: String, val updated: Long)
+
 internal object ChatRunner {
     const val HELLO = "你好，我是 AIFactory。描述你想构建的软件，我们从需求分析和工程规划开始。"
 
     val messages = mutableStateListOf<ChatMessage>()
+    val sessions = mutableStateListOf<SessionMeta>()
+    var currentId by mutableStateOf("")
+        private set
     var draft by mutableStateOf("")
     var busy by mutableStateOf(false)
         private set
@@ -39,26 +44,82 @@ internal object ChatRunner {
     private val main = Handler(Looper.getMainLooper())
     private var loaded = false
 
-    private fun historyFile(ctx: Context) = File(RuntimePaths.home(ctx), ".aifactory/chat.json")
+    private fun dir(ctx: Context) = File(RuntimePaths.home(ctx), ".aifactory/sessions")
+    private fun fileOf(ctx: Context, id: String) = File(dir(ctx), id + ".json")
+    private fun legacy(ctx: Context) = File(RuntimePaths.home(ctx), ".aifactory/chat.json")
 
-    /** 首次进入对话页时读档；没有档就给一句开场白。 */
+    private fun readMeta(ctx: Context, f: File): SessionMeta? = runCatching {
+        val arr = JSONArray(f.readText())
+        var title = "未命名对话"
+        var updated = f.lastModified()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            if (o.optString("role") == "user") { title = o.optString("text").replace("\n", " ").take(20); break }
+        }
+        updated = maxOf(updated, f.lastModified())
+        SessionMeta(f.nameWithoutExtension, title.ifBlank { "未命名对话" }, updated)
+    }.getOrNull()
+
+    /** 首次进入对话页：读会话列表；老版本的单文件 chat.json 迁移成第一个会话。 */
     fun load(ctx: Context) {
         if (loaded) return
         loaded = true
-        val f = historyFile(ctx)
-        if (!f.exists()) {
+        val d = dir(ctx).apply { mkdirs() }
+        val files = d.listFiles()?.filter { it.name.endsWith(".json") }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        sessions.clear()
+        files.forEach { f -> readMeta(ctx, f)?.let { sessions.add(it) } }
+        if (sessions.isEmpty()) {
+            val id = System.currentTimeMillis().toString()
+            currentId = id
+            messages.clear()
             messages.add(ChatMessage("assistant", HELLO))
-            return
+            runCatching {
+                if (legacy(ctx).exists()) {
+                    val arr = JSONArray(legacy(ctx).readText())
+                    for (i in 0 until arr.length()) {
+                        val o = arr.getJSONObject(i)
+                        messages.add(ChatMessage(o.optString("role", "assistant"), o.optString("text"), o.optString("meta", "")))
+                    }
+                    legacy(ctx).delete()
+                }
+            }
+            persist(ctx)
+        } else {
+            switchTo(ctx, sessions.first().id)
         }
+    }
+
+    fun switchTo(ctx: Context, id: String) {
+        if (busy) return
+        if (currentId.isNotBlank() && currentId != id) persist(ctx)
+        currentId = id
+        messages.clear()
+        val f = fileOf(ctx, id)
         runCatching {
             val arr = JSONArray(f.readText())
-            messages.clear()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 messages.add(ChatMessage(o.optString("role", "assistant"), o.optString("text"), o.optString("meta", "")))
             }
         }
         if (messages.isEmpty()) messages.add(ChatMessage("assistant", HELLO))
+    }
+
+    fun newChat(ctx: Context) {
+        if (busy) return
+        persist(ctx)
+        val id = System.currentTimeMillis().toString()
+        currentId = id
+        messages.clear()
+        messages.add(ChatMessage("assistant", HELLO))
+        sessions.add(0, SessionMeta(id, "新对话", System.currentTimeMillis()))
+        persist(ctx)
+    }
+
+    fun delete(ctx: Context, id: String) {
+        if (busy || id == currentId) return
+        fileOf(ctx, id).delete()
+        sessions.removeAll { it.id == id }
     }
 
     fun clear(ctx: Context) {
@@ -69,13 +130,20 @@ internal object ChatRunner {
 
     fun persist(ctx: Context) {
         val snapshot = messages.toList()
+        val id = currentId
+        if (id.isBlank()) return
         scope.launch(Dispatchers.IO) {
             runCatching {
                 val arr = JSONArray()
                 snapshot.forEach { arr.put(JSONObject().put("role", it.role).put("text", it.text).put("meta", it.meta)) }
-                val f = historyFile(ctx)
+                val f = fileOf(ctx, id)
                 f.parentFile?.mkdirs()
                 f.writeText(arr.toString())
+                val idx = sessions.indexOfFirst { it.id == id }
+                if (idx >= 0) {
+                    val title = snapshot.firstOrNull { it.role == "user" }?.text?.take(20) ?: "新对话"
+                    sessions[idx] = SessionMeta(id, title.ifBlank { "新对话" }, System.currentTimeMillis())
+                }
             }
         }
     }
@@ -91,12 +159,14 @@ internal object ChatRunner {
             return
         }
         busy = true
+        // 只带本会话最近 8 条做上下文：换主题 = 新建会话，不会互相污染
+        val prior = messages.dropLast(1).takeLast(8).map { it.role to it.text }
         job = scope.launch {
             try {
                 if (agentMode) {
                     val agent = AgentEngine(ctx)
                     val t0 = System.currentTimeMillis()
-                    val answer = agent.run(prompt, cfg) { ev -> main.post { messages.add(ChatMessage("assistant", ev)) } }
+                    val answer = agent.run(prompt, cfg, prior) { ev -> main.post { messages.add(ChatMessage("assistant", ev)) } }
                     val sec = ((System.currentTimeMillis() - t0) / 100) / 10.0
                     messages.add(ChatMessage("assistant", answer, "用时 " + sec + "s · " + agent.lastStats))
                 } else {
