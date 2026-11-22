@@ -147,7 +147,13 @@ internal object PluginRunner {
         scope.launch {
             try {
                 val prefix = RuntimePaths.prefix(ctx)
+                // 若设备上有本地 deb 仓库，先重建索引并挂上 file:// 源，apt 不再完全依赖网络
                 var pre = ""
+                if (LocalRepo.dir(ctx).listFiles { f -> f.isFile && f.name.endsWith(".deb") }?.isNotEmpty() == true) {
+                    LocalRepo.rebuild(ctx, rt)
+                    LocalRepo.ensureSource(ctx)
+                    pre = "apt-get update -o Acquire::Retries=0 2>&1 | tail -6; "
+                }
                 if (packages.any { it.startsWith("gradle") }) {
                     val sl = File(prefix, "etc/apt/sources.list")
                     val extra = cfg.extraRepoUrl
@@ -156,7 +162,7 @@ internal object PluginRunner {
                             sl.appendText("\n# 补充源：Gradle 8.7 等\ndeb [trusted=yes] $extra ./\n")
                         }
                     }
-                    pre = "apt-get update -y >/dev/null 2>&1; "
+                    pre += "apt-get update -y >/dev/null 2>&1; "
                 }
                 // 不能用 pkg：termux-tools 的 pkg 会探测镜像，发现本仓库没有 InRelease 就判 "bad"，
                 // 然后把 sources.list 改写成官方 termux 源（前缀 com.termux），把 runtime 带坏。

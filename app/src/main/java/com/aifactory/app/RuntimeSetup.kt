@@ -18,6 +18,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** 取 SAF Uri 的显示文件名，用于给本地仓库里的 deb 保名。 */
+private fun displayName(ctx: android.content.Context, uri: Uri): String? = runCatching {
+    ctx.contentResolver.query(
+        uri,
+        arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+        null, null, null
+    )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+}.getOrNull()
+
 /** 设置页里的 Runtime / SDK 安装卡片（取代原来的 Termux 连接说明）。 */
 @Composable
 fun RuntimeSetupCard() {
@@ -48,22 +57,37 @@ fun RuntimeSetupCard() {
 
     val debPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (!uris.isNullOrEmpty()) SetupRunner.run(ctx) {
-            val inbox = File(RuntimePaths.home(ctx), ".aifactory/inbox").apply { mkdirs() }
+            val repo = LocalRepo.dir(ctx)
             val saved = ArrayList<File>()
             withContext(Dispatchers.IO) {
                 uris.forEachIndexed { i, u ->
-                    val f = File(inbox, "local-$i.deb")
+                    val nm = displayName(ctx, u) ?: ("pkg-" + i + ".deb")
+                    val safe = nm.replace('/', '_')
+                    val f = File(repo, if (safe.endsWith(".deb")) safe else safe + ".deb")
                     ctx.contentResolver.openInputStream(u)!!.use { ins -> f.outputStream().use { ins.copyTo(it) } }
                     saved += f
                 }
             }
-            SetupRunner.report("已拷入 ${saved.size} 个 deb（${saved.sumOf { it.length() } / 1048576} MB），开始安装…")
-            val cmd = "cd " + shQuote(inbox.path) + " && apt install -y " +
-                saved.joinToString(" ") { "./" + it.name } + " 2>&1"
-            val r = rt.run(cmd, RuntimePaths.home(ctx), 3600)
-            SetupRunner.report((if (r.ok) "本地包安装完成。" else "本地包安装失败（退出码 ${r.exitCode}）：") +
-                "\n" + tailText(r.output, 1500))
-            saved.forEach { it.delete() }
+            SetupRunner.report("已拷入 " + saved.size + " 个 deb（" + (saved.sumOf { it.length() } / 1048576) + " MB），生成本地索引…")
+            val (ok, info) = withContext(Dispatchers.IO) { LocalRepo.rebuild(ctx, rt) }
+            if (!ok) {
+                SetupRunner.report("本地索引生成失败：" + info)
+                return@run
+            }
+            LocalRepo.ensureSource(ctx)
+            val names = info.split(' ').filter { it.isNotBlank() }
+            SetupRunner.report("本地索引就绪（" + names.size + " 个包）：" + names.joinToString(" ") + "，开始安装…")
+            val cmd = "dpkg --configure -a >/dev/null 2>&1; " +
+                "apt-get update -o Acquire::Retries=0 2>&1 | tail -12; " +
+                "apt-get install -y " + names.joinToString(" ") + " 2>&1"
+            val r = rt.run(cmd, repo, 3600) { SetupRunner.report(tailText(it, 1400)) }
+            if (r.ok) {
+                SetupRunner.report("本地包安装完成。")
+            } else {
+                SetupRunner.report("apt 未能解析依赖，改用 dpkg 直装（文件会装进去，缺依赖的会在上面留 ✗）…")
+                val fb = rt.run("dpkg -i --force-depends *.deb 2>&1 | tail -25", repo, 3600) { SetupRunner.report(tailText(it, 1400)) }
+                SetupRunner.report((if (fb.ok) "dpkg 直装结束（退出 0）。" else "dpkg 直装退出码 " + fb.exitCode + "。") + "\n" + tailText(fb.output, 900))
+            }
         }
     }
 
@@ -129,6 +153,12 @@ fun RuntimeSetupCard() {
             OutlinedButton(enabled = !busy && rt.isInstalled(), onClick = {
                 debPicker.launch(arrayOf("application/vnd.debian.binary-package", "application/octet-stream", "*/*"))
             }) { Text("选择本地 .deb") }
+            OutlinedButton(enabled = !busy && rt.isInstalled(), onClick = {
+                SetupRunner.run(ctx) {
+                    val r = rt.run("dpkg --configure -a 2>&1 | tail -5; echo ---; dpkg -l 2>/dev/null | grep -v '^ii' | tail -25", RuntimePaths.home(ctx), 300)
+                    SetupRunner.report("dpkg 状态检查：\n" + tailText(r.output, 1200))
+                }
+            }) { Text("修复 dpkg 状态") }
 
             Text(
                 "Runtime 与 SDK 都由本仓库的 GitHub Actions 构建（包名 com.aifactory.app）。SDK 内含 platforms/android-34/35/36 与 build-tools/34.0.0/35.0.0/36.0.0，" +
