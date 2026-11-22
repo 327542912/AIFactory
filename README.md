@@ -69,24 +69,71 @@ deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runti
 终端里：
 
 ```bash
-pkg install openjdk-21 gradle git apksigner zip unzip
+# JDK / git / apksigner / zip / unzip 来自主源
+pkg install -y openjdk-21 git apksigner zip unzip
 ```
 
-装完回设置页，`java` / `gradle` / `git` / `apksigner` 四个 ✗ 会变成 ✓（判据是 `files/usr/bin` 下文件是否真实存在，不缓存状态）。
+**Gradle 别直接 `pkg install gradle`**——主源的 `gradle` 配方是 `1.9.0.0`（2014 年的 Gradle 1.9），
+在 JDK 21 上起不来，更别说驱动 AGP 8.6。Gradle 8.7 单独放在补充源里：
+
+```bash
+echo 'deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runtime-extra/ ./' \
+  >> $PREFIX/etc/apt/sources.list
+pkg update
+pkg install -y gradle     # 装的是 8.7-1，落在 opt/gradle-8.7，bin/gradle 是指向它的 wrapper
+gradle --version          # 应输出 Gradle 8.7
+```
+
+补充源与主源物理分开（`runtime-extra` 这个 tag），是因为 `runtime-repo` 每次流水线重跑都会整份重建，
+手工塞进去的包会被覆盖掉。
+
+装完回设置页，`java` / `gradle` / `git` / `apksigner` 四个 ✗ 会变成 ✓（判据是 `files/usr/bin` 下文件是否真实存在，不缓存状态；
+Gradle 的判据额外要求 `opt/gradle-8.7/bin/gradle` 在，避免把 1.9 误判成"已装好"）。
+
+也可以走 插件页 → 「Gradle / Android Build」→ 安装：它会把补充源写好、`pkg update`、再装这五个包。
 
 ### 5. 装 Android SDK
 
-第 3 张卡导入 SDK zip（需含 `platforms/android-34` 与 `build-tools/`）。**注意**：官方 `build-tools` 里的 `aapt2` 是 x86_64 ELF，在 arm64 手机上跑不了，必须换 aarch64 静态版（见[已知限制](#已知限制)）。
+设置页第 3 张卡的地址已经预填好，直接点「下载并安装」：
+
+```text
+https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip
+```
+
+143,210,636 B，sha256 `70d10e0a7f180a510134f904b43f4a0c9c7b9dcdcbcb927493b5c8a6a966faa3`。
+包里是 `platforms/android-34|35|36`、`build-tools/34.0.0|35.0.0|36.0.0`（aapt2/aapt/aidl/dexdump/split-select/zipalign 全是 aarch64 静态二进制）、
+`platform-tools/adb`（arm64）。
+
+**别去 Google 官方下载 `build-tools`**：官方 zip 里的 `aapt2` 是 x86_64 ELF，在手机上 `exec` 直接 `Cannot execute binary file`。
+这份 zip 已经把可执行文件换成 aarch64 静态版（`lzhiyong/android-sdk-tools`），`lib/d8.jar`、`lib/apksigner.jar` 仍是官方 jar，可以照常 `java -jar`。
+
 
 ### 6. 在手机上编 APK
 
+仓库自带闭环脚本（构建 → 验签 → 安装 → 启动 → 扫崩溃日志）：
+
 ```bash
 cd ~/projects/<项目>
-bash build_termux.sh
-# 产物：app/build/outputs/apk/debug/app-debug.apk
+bash /path/to/AIFactory/scripts/device-build.sh    # 参数：项目目录、包名
+# 产物：app/build/outputs/apk/debug/*.apk
 ```
 
-`build_termux.sh` 的 shebang 是 `#!/data/data/com.termux/files/usr/bin/bash`（历史遗留），**在 Runtime 里必须用 `bash build_termux.sh` 调用**，直接 `./build_termux.sh` 会 `bad interpreter`。
+脚本做的五件事：
+
+1. **前置检查**：`java ≥17`、Gradle `≥8`（不是 8.7 会自动去补充源装）、`SDK/platforms`、`SDK/build-tools/*/aapt2`
+   能在本机执行（架构不对在这里就挂，不会等到 Gradle 里报一堆看不懂的错）。
+2. **构建**：写 `~/.gradle/gradle.properties`（`-Xmx1536m`、`daemon=false`），
+   并以 `-Pandroid.aapt2FromMavenOverride=<SDK 里的 aapt2>` 调用 —— AGP 默认从 Maven 拉 x86_64 的 aapt2，
+   在手机上执行不了，必须指向 SDK 里的 aarch64 版。
+3. **验签**：`apksigner verify --print-certs`。
+4. **安装**：同一台设备没法用 `adb` 装自己（adb 需要另一台机器或无线调试），
+   所以优先走 Shizuku 的 `rish -c "pm install -r -t <apk>"`；没有 Shizuku 就打印手工路径。
+5. **启动 + 崩溃检查**：`am start` → 6 秒后 `pidof` 判断进程存活 → `logcat -d` 抓 `FATAL EXCEPTION`。
+
+完整日志写到 `~/.aifactory/logs/device-build-<时间>.log`，失败时最后一行会告诉你去哪看。
+
+单独手搓（不用脚本）时注意：`build_termux.sh` 的 shebang 是 `#!/data/data/com.termux/files/usr/bin/bash`（历史遗留），
+**在 Runtime 里必须用 `bash build_termux.sh` 调用**，直接 `./build_termux.sh` 会 `bad interpreter`。
 
 ---
 
@@ -170,8 +217,10 @@ app/src/main/java/com/aifactory/app/
 | tag | 资产 | 说明 |
 |---|---|---|
 | [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,610,948 B，sha256 `1738bf87…0d750d` |
-| [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | ~200 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源 |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.2-debug.apk` + `.sha256` | 16,491,168 B |
+| [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | 264 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源，含 `openjdk-21` / `git` / `apksigner` / `zip` / `unzip`；**流水线每次重跑整份重建** |
+| [`runtime-extra`](https://github.com/327542912/AIFactory/releases/tag/runtime-extra) | `gradle_8.7-1_all.deb` + `Packages`（手动维护） | `gradle 1.9.0.0` 替代品，131,417,012 B，sha256 `027493b1…3ce09`；流水线不碰它 |
+| [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 143,210,636 B，sha256 `70d10e0a…6faa3`（3 个 platform + 3 个 build-tools + arm64 adb） |
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.5-debug.apk` + `.sha256` | 覆盖升级用固定签名 |
 
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
 
@@ -181,8 +230,8 @@ app/src/main/java/com/aifactory/app/
 
 | 问题 | 现状 / 原因 | 出路 |
 |---|---|---|
-| `aapt2` 是 ✗ | 官方 `build-tools` 里的 `aapt2` 为 x86_64 ELF，arm64 上无法执行 | 换 aarch64 静态版（`lzhiyong/android-sdk-tools` 35.0.2），并配 `android.aapt2FromMavenOverride` |
-| Android SDK 从未打包 | App 只支持导入 zip，没有内置下载源 | 需要自建 `sdk-aarch64.zip` 并发布 |
+| `aapt2` 是 ✗ | 官方 `build-tools` 里的 `aapt2` 为 x86_64 ELF，arm64 上无法执行 | 已解决：SDK 包里换 aarch64 静态版，构建时传 `-Pandroid.aapt2FromMavenOverride` |
+| 主源里的 `gradle` 是 1.9.0.0 | termux-packages 的配方就停在这个版本（Gradle 1.9 需要 JDK 8 时代环境） | 已用 `runtime-extra` 提供 Gradle 8.7（官方发行包重打包，`bin/gradle` 是 wrapper） |
 | `termux-setup-storage` 失效 | `bin/am` 调的是 `com.termux.termuxam.Am` 类名，包名不同 | 自造 `am` 桥接，或改用 `curl` 直接拉文件 |
 | 官方源不可用 | 官方包前缀是 `com.termux`，装进来路径全错 | 必须用自建 `runtime-repo` |
 | 每轮冷编 36+ 分钟 | `~/.termux-build` 不在挂载目录内 | 把缓存目录也挂出来 / 用自托管 runner |
@@ -211,7 +260,12 @@ app/src/main/java/com/aifactory/app/
 - [x] 源码重编的 ARM64 bootstrap（自建前缀，已发布）
 - [x] 自建 apt 源（`pkg install` 可用）
 - [x] App 0.2.2：`targetSdk 28`、版本号读 `BuildConfig`、插件页数据驱动
-- [ ] JDK / Gradle / apksigner 打进 apt 源（构建中）
+- [x] JDK 21 / git / apksigner / zip / unzip 进 `runtime-repo`（264 个 deb，前缀全部核对过 0 处 `com.termux`）
+- [x] Gradle 8.7 走独立 `runtime-extra` 源（绕开主源的 1.9.0.0）
+- [x] Android SDK 单一 zip 覆盖 34/35/36 + arm64 adb
+- [x] 固定签名 keystore：0.2.3 / 0.2.4 / 0.2.5 指纹一致，可覆盖升级不丢 `/data/data` 数据
+- [x] `scripts/device-build.sh`：设备端构建 → 验签 → 安装（Shizuku）→ 启动 → 扫 `FATAL EXCEPTION`
+- [ ] 设备端真跑通一次 `gradle assembleDebug`（脚本已就位，等你手机上跑）
 - [ ] arm64 版 Android SDK 打包
 - [ ] 设备端 `bash build_termux.sh` 出 APK 全链路跑通
 
