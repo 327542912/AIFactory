@@ -48,6 +48,8 @@ internal object Pipeline {
     var current by mutableStateOf(""); private set
     var stage by mutableStateOf(""); private set
     var stagesDone by mutableStateOf(emptyList<String>()); private set
+    var stageTimes by mutableStateOf(emptyList<String>()); private set
+    var lastMs by mutableStateOf(0L); private set
     var log by mutableStateOf(""); private set
     var queued by mutableStateOf(0); private set
     var busy by mutableStateOf(false); private set
@@ -121,11 +123,19 @@ internal object Pipeline {
 
     private suspend fun run(ctx: Context, t: Task) {
         val started = System.currentTimeMillis()
-        main.post { busy = true; current = t.title; log = ""; stage = t.stages.firstOrNull() ?: ""; stagesDone = emptyList() }
+        main.post { busy = true; current = t.title; log = ""; stage = t.stages.firstOrNull() ?: ""; stagesDone = emptyList(); stageTimes = emptyList(); lastMs = 0L }
 
         val report: (String) -> Unit = { s -> main.post { log = (log + s).takeLast(20000) } }
+        var markAt = started
         val advance: (String) -> Unit = { name ->
-            main.post { if (!stagesDone.contains(name)) stagesDone = stagesDone + name }
+            main.post {
+                if (!stagesDone.contains(name)) {
+                    stagesDone = stagesDone + name
+                    val sec = ((System.currentTimeMillis() - markAt) / 100) / 10.0
+                    stageTimes = stageTimes + (name + " " + sec + "s")
+                    markAt = System.currentTimeMillis()
+                }
+            }
         }
 
         val result = try {
@@ -139,7 +149,9 @@ internal object Pipeline {
 
         val ok = !result.startsWith("失败")
         val full = log + "\n" + (if (ok) "✅ " else "❌ ") + result
-        record(ctx, t.title, ok, System.currentTimeMillis() - started, result)
+        val totalMs = System.currentTimeMillis() - started
+        main.post { lastMs = totalMs }
+        record(ctx, t.title, ok, totalMs, result)
         // 完整日志落盘：按时间命名，保留最近 200 个，切页/重启都不丢
         val saved = runCatching {
             val dir = File(RuntimePaths.home(ctx), ".aifactory/logs").apply { mkdirs() }
@@ -156,7 +168,8 @@ internal object Pipeline {
 
     /** 给 Agent 用的现场快照：当前在跑什么、上个任务成功与否、最近日志、最近产物。 */
     fun snapshot(ctx: Context): String = buildString {
-        appendLine("已完成阶段：" + stagesDone.joinToString(" → "))
+        appendLine("已完成阶段：" + stagesDone.joinToString(" → ") + (if (stageTimes.isNotEmpty()) "  【耗时：" + stageTimes.joinToString(" / ") + "】" else ""))
+        appendLine("上个任务总耗时：" + (lastMs / 1000.0) + "s")
         appendLine("排队中：" + queued + "  运行中：" + (if (busy) (current.ifBlank { "是" }) else "否") +
             (if (stage.isNotBlank()) " / 阶段：" + stage else ""))
         appendLine("最近产物：" + (lastApk?.path ?: "无") + (lastPkg?.let { "  包名：" + it } ?: ""))

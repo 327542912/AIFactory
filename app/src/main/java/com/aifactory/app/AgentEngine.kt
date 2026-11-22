@@ -40,6 +40,9 @@ class AgentEngine(private val ctx: Context) {
 
     private class ToolDef(val name: String, val desc: String, val params: Map<String, String>, val required: List<String>)
 
+    /** 给 UI 展示的性能指标：步数 / 工具调用次数 / 模型请求次数。 */
+    var lastStats: String = ""; private set
+
     private val tools = listOf(
         ToolDef("run_shell", "在 Runtime 中执行 shell 命令（bash）。默认工作目录为工作区。",
             mapOf("command" to "要执行的命令", "cwd" to "相对工作区的目录，可选", "timeout_sec" to "超时秒数，默认 120，最大 3600"),
@@ -59,6 +62,8 @@ class AgentEngine(private val ctx: Context) {
             emptyMap(), emptyList()),
         ToolDef("read_log", "读取日志文件（默认最近一次任务日志），可指定行数。",
             mapOf("path" to "日志路径，留空=最近一次", "lines" to "读取最后多少行，默认 200"), emptyList()),
+        ToolDef("inspect_apk", "解析 APK：包名/版本/权限/入口 Activity/minSdk、文件清单、dex 里出现的类数量。用户上传 APK 或要审查产物时用它（不要靠猜）。",
+            mapOf("path" to "APK 路径（工作区相对路径或绝对路径）"), listOf("path")),
         ToolDef("fetch_url", "抓取一个 http(s) 网址的文本内容（内置网络栈，不依赖 curl）。用于查文档、看仓库文件、下载文本。",
             mapOf("url" to "要抓取的网址", "max_chars" to "最多返回多少字符，默认 6000"), listOf("url")),
         ToolDef("remember", "把一条经验写进长期记忆（跨会话保留），用于自我改进：踩过的坑、验证有效的参数、环境限制。",
@@ -120,6 +125,7 @@ class AgentEngine(private val ctx: Context) {
         suspend fun emit(s: String) = withContext(Dispatchers.Main) { onEvent(s) }
         history.put(JSONObject().put("role", "user").put("content", userText))
         val limit = cfg.maxSteps.coerceAtLeast(1)
+        var steps = 0; var toolCalls = 0; var requests = 0
         var lastSig = ""
         var repeats = 0
         // 连续出现完全相同的调用和结果 = 卡住了：4 次提醒换思路，8 次暂停
@@ -132,6 +138,7 @@ class AgentEngine(private val ctx: Context) {
             for (step in 1..limit) {
                 currentCoroutineContext().ensureActive()
                 compactHistory()
+                requests++; steps = step
                 var resp = withContext(Dispatchers.IO) { callModel(cfg) }
                 if (resp.first == 400 && nativeTools && resp.second.contains("tool", ignoreCase = true)) {
                     nativeTools = false
@@ -157,6 +164,7 @@ class AgentEngine(private val ctx: Context) {
                         val name = fn.getString("name")
                         val args = parseArgs(fn.opt("arguments"))
                         emit("🔧 $name ${briefArgs(args)}")
+                        toolCalls++
                         val result = runTool(name, args)
                         emit("↳ ${tailText(result, 500)}")
                         history.put(
@@ -181,6 +189,7 @@ class AgentEngine(private val ctx: Context) {
                         val name = j.getString("name")
                         val args = parseArgs(j.opt("arguments"))
                         emit("🔧 $name ${briefArgs(args)}")
+                        toolCalls++
                         runTool(name, args)
                     } catch (e: Exception) {
                         "工具调用格式错误：${e.message}"
@@ -199,7 +208,43 @@ class AgentEngine(private val ctx: Context) {
         } catch (e: CancellationException) {
             throw e
         } finally {
+            lastStats = "模型请求 " + requests + " 次 · 工具调用 " + toolCalls + " 次"
             KeepAliveService.stop(ctx)
+        }
+    }
+
+    /** 解析 APK：包名/版本/权限/入口/最小 SDK + 文件清单。避免模型对二进制靠猜。 */
+    private fun inspectApk(ctx: Context, pathArg: String): String {
+        val f = runCatching {
+            val p = File(pathArg)
+            if (p.isAbsolute) p else File(workspace, pathArg)
+        }.getOrNull()
+        if (f == null || !f.exists()) return "找不到 APK：$pathArg（请给出存在的路径，例如 files/outputs/xxx.apk）"
+        return buildString {
+            appendLine("APK：${f.name}  ${f.length()} B")
+            val aapt2 = File(RuntimePaths.home(ctx), "android-sdk").walkTopDown()
+                .firstOrNull { it.name == "aapt2" && it.isFile } 
+            if (aapt2 != null) {
+                val out = runCatching {
+                    val pb = ProcessBuilder(aapt2.absolutePath, "dump", "badging", f.absolutePath)
+                        .redirectErrorStream(true).start()
+                    pb.inputStream.bufferedReader().use { it.readText() }.also { pb.waitFor() }
+                }.getOrElse { "aapt2 失败：" + it.message }
+                val lines = out.lines().filter { l ->
+                    l.startsWith("package:") || l.startsWith("sdkVersion") || l.startsWith("targetSdkVersion") ||
+                        l.contains("launchable-activity") || l.startsWith("uses-permission") || l.startsWith("application-label")
+                }
+                appendLine(lines.take(25).joinToString("\n"))
+            } else appendLine("（未找到 aapt2，跳过 badging）")
+            runCatching {
+                val z = java.util.zip.ZipFile(f)
+                val names = z.entries().toList().map { it.name }
+                val dex = names.filter { it.matches(Regex("classes[0-9]*\\\\.dex")) }
+                appendLine("文件 " + names.size + " 个；dex：" + dex.joinToString(","))
+                val top = names.filter { !it.startsWith("META-INF") }.take(60)
+                appendLine("清单：" + top.joinToString(", "))
+                z.close()
+            }.onFailure { appendLine("读 zip 失败：" + it.message) }
         }
     }
 
@@ -316,6 +361,7 @@ class AgentEngine(private val ctx: Context) {
                 if (f == null || !f.exists()) "没有日志文件：${p.ifBlank { "（没有任何任务日志）" }}"
                 else f.readLines().takeLast(lines.coerceIn(1, 5000)).joinToString("\n")
             }
+            "inspect_apk" -> inspectApk(ctx, a.getString("path"))
             "fetch_url" -> {
                 val u = a.getString("url")
                 val cap = a.optString("max_chars").toIntOrNull() ?: 6000

@@ -55,7 +55,7 @@ internal object ChatRunner {
             messages.clear()
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                messages.add(ChatMessage(o.optString("role", "assistant"), o.optString("text")))
+                messages.add(ChatMessage(o.optString("role", "assistant"), o.optString("text"), o.optString("meta", "")))
             }
         }
         if (messages.isEmpty()) messages.add(ChatMessage("assistant", HELLO))
@@ -72,7 +72,7 @@ internal object ChatRunner {
         scope.launch(Dispatchers.IO) {
             runCatching {
                 val arr = JSONArray()
-                snapshot.forEach { arr.put(JSONObject().put("role", it.role).put("text", it.text)) }
+                snapshot.forEach { arr.put(JSONObject().put("role", it.role).put("text", it.text).put("meta", it.meta)) }
                 val f = historyFile(ctx)
                 f.parentFile?.mkdirs()
                 f.writeText(arr.toString())
@@ -95,8 +95,10 @@ internal object ChatRunner {
             try {
                 if (agentMode) {
                     val agent = AgentEngine(ctx)
+                    val t0 = System.currentTimeMillis()
                     val answer = agent.run(prompt, cfg) { ev -> main.post { messages.add(ChatMessage("assistant", ev)) } }
-                    messages.add(ChatMessage("assistant", answer))
+                    val sec = ((System.currentTimeMillis() - t0) / 100) / 10.0
+                    messages.add(ChatMessage("assistant", answer, "用时 " + sec + "s · " + agent.lastStats))
                 } else {
                     val hist = messages.toList()
                     val answer = withContext(Dispatchers.IO) {

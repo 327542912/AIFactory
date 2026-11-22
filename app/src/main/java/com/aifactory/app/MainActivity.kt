@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-internal data class ChatMessage(val role: String, val text: String)
+internal data class ChatMessage(val role: String, val text: String, val meta: String = "")
 private enum class Page(val label: String) { CHAT("对话"), PROJECTS("项目"), FILES("文件"), TERMINAL("终端"), PLUGINS("插件"), SETTINGS("设置") }
 
 @Composable
@@ -222,11 +222,25 @@ private fun ChatPage(
                 }
             }
             items(messages) { message ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.role == "user") Arrangement.End else Arrangement.Start) {
+                val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                var copied by remember { mutableStateOf(false) }
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = if (message.role == "user") Alignment.End else Alignment.Start
+                ) {
                     Surface(
                         color = if (message.role == "user") MaterialTheme.colorScheme.primary.copy(alpha = .13f) else MaterialTheme.colorScheme.surface,
                         shape = RoundedCornerShape(16.dp), modifier = Modifier.widthIn(max = 340.dp)
                     ) { Text(message.text, Modifier.padding(14.dp), fontSize = 14.sp, lineHeight = 21.sp) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (message.meta.isNotBlank()) Text(message.meta, color = Muted, fontSize = 10.sp, modifier = Modifier.padding(end = 4.dp))
+                        TextButton(onClick = {
+                            clipboard.setPrimaryClip(ClipData.newPlainText("message", message.text))
+                            copied = true
+                        }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
+                            Text(if (copied) "已复制" else "复制", fontSize = 10.sp, color = Muted)
+                        }
+                    }
                 }
             }
             if (busy) item { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)); Text(if (agentMode) "Agent 工作中…" else "正在请求模型…", color = Muted, fontSize = 12.sp); Spacer(Modifier.width(8.dp)); TextButton(onClick = { ChatRunner.stop() }) { Text("停止") } } }
