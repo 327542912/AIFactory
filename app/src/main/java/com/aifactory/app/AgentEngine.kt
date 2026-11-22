@@ -62,6 +62,10 @@ class AgentEngine(private val ctx: Context) {
             emptyMap(), emptyList()),
         ToolDef("read_log", "读取日志文件（默认最近一次任务日志），可指定行数。",
             mapOf("path" to "日志路径，留空=最近一次", "lines" to "读取最后多少行，默认 200"), emptyList()),
+        ToolDef("download_url", "把 http(s) 网址的文件下载到工作区（二进制安全，可用于下载 jar/zip/deb/apk）。",
+            mapOf("url" to "下载地址", "path" to "保存到工作区的相对路径", "max_mb" to "大小上限 MB，默认 200"), listOf("url", "path")),
+        ToolDef("decompile_apk", "把 APK 反编译成 Java 源码（jadx）。没装 jadx 时会自动下载官方 jadx 到 .aifactory/tools/jadx。",
+            mapOf("path" to "APK 路径", "out" to "输出目录（默认 work/jadx-out）"), listOf("path")),
         ToolDef("inspect_apk", "解析 APK：包名/版本/权限/入口 Activity/minSdk、文件清单、dex 里出现的类数量。用户上传 APK 或要审查产物时用它（不要靠猜）。",
             mapOf("path" to "APK 路径（工作区相对路径或绝对路径）"), listOf("path")),
         ToolDef("fetch_url", "抓取一个 http(s) 网址的文本内容（内置网络栈，不依赖 curl）。用于查文档、看仓库文件、下载文本。",
@@ -241,6 +245,76 @@ class AgentEngine(private val ctx: Context) {
         }
     }
 
+    /** 下载任意二进制到工作区；这是 Agent“自己找工具”的手，不依赖 curl。 */
+    private fun downloadUrl(url: String, path: String, maxMb: Int): String {
+        val out = resolve(path)
+        out.parentFile?.mkdirs()
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 20000; readTimeout = 60000; instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "AIFactory/1.0")
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) return "HTTP " + code + "，下载失败"
+            val cap = maxMb.toLong() * 1024 * 1024
+            var total = 0L
+            conn.inputStream.use { ins -> out.outputStream().use { outs ->
+                val buf = ByteArray(64 * 1024)
+                while (true) {
+                    val n = ins.read(buf); if (n < 0) break
+                    total += n
+                    if (total > cap) return "超过大小上限 " + maxMb + "MB，已中止（已写 " + total + " B）"
+                    outs.write(buf, 0, n)
+                }
+            } }
+            "已下载 " + total + " B → " + out.path
+        } catch (e: Exception) {
+            "下载失败：" + (e.message ?: e.javaClass.simpleName)
+        } finally { conn?.disconnect() }
+    }
+
+    /** 反编译 APK：没有 jadx 就自己下官方包（bin-only 的 zip 解出 lib/*.jar 用 java -cp 跑）。 */
+    private suspend fun decompileApk(ctx: Context, apkPath: String, outArg: String): String = withContext(Dispatchers.IO) {
+        runCatching {
+            val apk = resolve(apkPath)
+            if (!apk.exists()) return@runCatching "找不到 APK：" + apkPath
+            val tools = File(RuntimePaths.home(ctx), ".aifactory/tools").apply { mkdirs() }
+            fun findJadx(): File? = tools.walkTopDown().firstOrNull { it.isFile && it.name.startsWith("jadx") && it.name.endsWith(".jar") }
+            var jar = findJadx()
+            if (jar == null) {
+                val dl = downloadUrl(
+                    "https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip",
+                    File(workspace, ".dl/jadx.zip").path, 80
+                )
+                if (!dl.startsWith("已下载")) return@runCatching "没有 jadx，自动下载失败：" + dl
+                java.util.zip.ZipInputStream(File(workspace, ".dl/jadx.zip").inputStream()).use { zin ->
+                    var e = zin.nextEntry
+                    while (e != null) {
+                        val n = e.name
+                        if (n.startsWith("lib/") && n.endsWith(".jar")) {
+                            val dest = File(tools, n.substringAfterLast('/'))
+                            dest.outputStream().use { os -> zin.copyTo(os) }
+                        }
+                        e = zin.nextEntry
+                    }
+                }
+                jar = findJadx()
+            }
+            if (jar == null) return@runCatching "jadx 的 lib 里没找到 jadx*.jar"
+            val out = if (outArg.isBlank()) File(workspace, "jadx-out") else resolve(outArg)
+            val java = File(RuntimePaths.prefix(ctx), "bin/java")
+            val pb = ProcessBuilder(
+                if (java.exists()) java.path else "java", "-Xmx1g",
+                "-cp", File(tools, "*").path + ":" + jar.path,
+                "jadx.cli.JadxCLI", "--no-res", "-d", out.path, apk.path
+            ).redirectErrorStream(true).start()
+            val text = pb.inputStream.bufferedReader().use { it.readText() }
+            val code = pb.waitFor()
+            "退出码 " + code + "\n" + text.takeLast(2000) + "\n输出目录：" + out.path
+        }.getOrElse { "反编译失败：" + (it.message ?: it.javaClass.simpleName) }
+    }
+
     /** 解析 APK：包名/版本/权限/入口/最小 SDK + 文件清单。避免模型对二进制靠猜。 */
     private fun inspectApk(ctx: Context, pathArg: String): String {
         val f = runCatching {
@@ -390,6 +464,8 @@ class AgentEngine(private val ctx: Context) {
                 else f.readLines().takeLast(lines.coerceIn(1, 5000)).joinToString("\n")
             }
             "inspect_apk" -> inspectApk(ctx, a.getString("path"))
+            "download_url" -> downloadUrl(a.getString("url"), a.getString("path"), a.optString("max_mb").toIntOrNull() ?: 200)
+            "decompile_apk" -> decompileApk(ctx, a.getString("path"), a.optString("out"))
             "fetch_url" -> {
                 val u = a.getString("url")
                 val cap = a.optString("max_chars").toIntOrNull() ?: 6000
