@@ -129,8 +129,10 @@ object LocalRepo {
             val fmt = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
             fmt.timeZone = TimeZone.getTimeZone("GMT")
             append("Date: " + fmt.format(Date()) + "\n")
-            append("MD5Sum:\n " + md5 + " " + pkgFile.length() + " ./Packages\n")
-            append("SHA256:\n " + sha + " " + pkgFile.length() + " ./Packages\n")
+            // 键必须是 "Packages"，不能带 "./"：apt 用相对仓库根的路径比对，
+            // 写成 "./Packages" 会报 "Skipping acquire ... does not seem to provide it"
+            append("MD5Sum:\n " + md5 + " " + pkgFile.length() + " Packages\n")
+            append("SHA256:\n " + sha + " " + pkgFile.length() + " Packages\n")
         }
         val rt2 = File(d, "Release.tmp")
         rt2.writeText(release)
