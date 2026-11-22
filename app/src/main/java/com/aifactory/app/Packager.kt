@@ -18,7 +18,7 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
     private val sdk = RuntimePaths.sdk(ctx)
     private val cfg = AppConfig(ctx)
 
-    data class BuildResult(val ok: Boolean, val apk: File?, val message: String, val log: String)
+    data class BuildResult(val ok: Boolean, val apk: File?, val message: String, val log: String, val pkg: String? = null)
 
     companion object {
         fun latestBuildTools(sdk: File): File? =
@@ -237,7 +237,14 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         val out = File(RuntimePaths.outputs(ctx), root.name + "-debug-" + stamp + ".apk")
         out.parentFile?.mkdirs()
         apk.copyTo(out, overwrite = true)
-        return BuildResult(true, out, "构建成功（本地工具链，零网络）：" + out.name + "（" + out.length() / 1024 + " KB）", r.output)
+
+        onOutput?.invoke("--- 构建后自检 ---")
+        val t = SelfTest.verify(rt, out, aapt2, javaBin, signerJar)
+        onOutput?.invoke(t.lines)
+        if (!t.ok) {
+            return BuildResult(false, null, "自检未通过，产物已丢弃：\n" + t.lines, (r.output + "\n" + t.lines), null)
+        }
+        return BuildResult(true, out, "构建成功并自检通过：" + out.name + "（" + out.length() / 1024 + " KB）\n" + t.lines, r.output, t.pkg)
     }
 
     private fun keystoreFile() = File(home, ".aifactory/release.jks")
@@ -274,7 +281,7 @@ object Installer {
      * 唤起系统安装器；返回给用户看的提示。
      * 任何异常都转成文字返回：这里抛异常会直接让 App 闪退（FileProvider 找不到匹配 root 就是这样）。
      */
-    fun install(ctx: Context, apk: File): String {
+    fun install(ctx: Context, apk: File, pkg: String? = null, onLog: (String) -> Unit = {}): String {
         if (!apk.exists()) return "APK 不存在：${apk.path}"
         if (!ctx.packageManager.canRequestPackageInstalls()) {
             val i = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}"))
@@ -282,18 +289,42 @@ object Installer {
             ctx.startActivity(i)
             return "需要先允许 AIFactory 安装未知应用，已打开设置页。允许后请再次点击安装。"
         }
-        val first = runCatching { launch(ctx, apk) }
-        first.getOrNull()?.let { return it }
-        // 退路：拷到 cache 目录再试一次（cache-path 一定在授权范围内）
-        val second = runCatching {
+        // 统一先拷到 cache：这个目录一定在 FileProvider 授权内，不依赖 outputs 的路径匹配
+        val staged = runCatching {
             val dir = File(ctx.cacheDir, "apks").apply { mkdirs() }
-            val copy = File(dir, apk.name)
-            apk.copyTo(copy, overwrite = true)
-            launch(ctx, copy)
-        }
-        return second.getOrElse {
-            "唤起安装器失败：" + (first.exceptionOrNull()?.message ?: "") + " / " + it.message
-        }
+            File(dir, apk.name).also { apk.copyTo(it, overwrite = true) }
+        }.getOrElse { return "准备安装文件失败：" + it.message }
+        val r = runCatching { launch(ctx, staged) }
+        if (r.isFailure) return "唤起安装器失败：" + (r.exceptionOrNull()?.message ?: "未知错误")
+        if (pkg != null) watchInstall(ctx, pkg, onLog)
+        return r.getOrThrow()
+    }
+
+    /**
+     * 安装器是系统弹窗，我们无法确认用户点没点「安装」；
+     * 所以用一个后台线程轮询包是否出现，出现就启动它——这就是「装完必须能跑起来」的自动验证。
+     */
+    fun watchInstall(ctx: Context, pkg: String, onLog: (String) -> Unit, seconds: Int = 90) {
+        Thread {
+            val deadline = System.currentTimeMillis() + seconds * 1000L
+            while (System.currentTimeMillis() < deadline) {
+                Thread.sleep(1500)
+                val installed = runCatching {
+                    ctx.packageManager.getPackageInfo(pkg, 0); true
+                }.getOrDefault(false)
+                if (installed) {
+                    onLog("自检：检测到 " + pkg + " 已安装")
+                    val started = runCatching {
+                        val i = ctx.packageManager.getLaunchIntentForPackage(pkg) ?: return@runCatching false
+                        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(i); true
+                    }.getOrDefault(false)
+                    onLog(if (started) "自检：已启动 " + pkg + "，请确认界面已出现" else "自检：" + pkg + " 已安装但没有启动入口")
+                    return@Thread
+                }
+            }
+            onLog("自检：" + seconds + " 秒内未检测到 " + pkg + "（可能还没在安装器里点确认）")
+        }.apply { isDaemon = true }.start()
     }
 
     private fun launch(ctx: Context, file: File): String {

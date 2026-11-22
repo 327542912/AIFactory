@@ -100,9 +100,11 @@ internal object Pipeline {
             try {
                 val res = pk.build(dir, release) { chunk -> report(chunk) }
                 if (res.ok) {
-                    main.post { lastApk = res.apk }
+                    main.post { lastApk = res.apk; lastPkg = res.pkg }
                     val msg = "构建成功：" + (res.apk?.name ?: "?") + "（" + ((res.apk?.length() ?: 0L) / 1024) + " KB）"
-                    if (install && res.apk != null) msg + "\n" + Installer.install(ctx, res.apk) else msg
+                    if (install && res.apk != null) {
+                        msg + "\n" + Installer.install(ctx, res.apk, res.pkg) { line -> appendNote(line) }
+                    } else msg
                 } else {
                     res.message + "\n--- 日志末尾 ---\n" + tailText(res.log, 4000)
                 }

@@ -147,7 +147,9 @@ fun ProjectsScreen() {
                 Text(out.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Text("${out.length() / 1024} KB", fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { Pipeline.appendNote(Installer.install(ctx, out)) }) { Text("安装") }
+                    Button(onClick = {
+                        Pipeline.appendNote(Installer.install(ctx, out, Pipeline.lastPkg) { line -> Pipeline.appendNote(line) })
+                    }) { Text("安装") }
                     OutlinedButton(onClick = { exporter.launch(out.name) }) { Text("导出 APK") }
                 }
             }
