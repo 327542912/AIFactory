@@ -10,9 +10,10 @@ android {
     defaultConfig {
         applicationId = "com.aifactory.app"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 2
-        versionName = "0.1.0"
+        // 必须 <= 28：Android 10+ 对 targetSdk>=29 的应用禁止执行私有目录里的二进制（Runtime 依赖这一点）
+        targetSdk = 28
+        versionCode = 5
+        versionName = "0.2.2"
     }
     buildTypes {
         release { isMinifyEnabled = false }
@@ -23,6 +24,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 

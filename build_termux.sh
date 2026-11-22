@@ -13,7 +13,7 @@ if [ -n "$JAVA_MAJOR" ] && [ "$JAVA_MAJOR" -lt 17 ]; then
   exit 1
 fi
 
-echo "AIFactory 0.1.0 build"
+echo "AIFactory 0.2.0 bootstrap build"
 echo "Project: $ROOT"
 echo "Java: $(java -version 2>&1 | head -n 1)"
 echo "Gradle: $(gradle --version | grep '^Gradle ' | head -n 1)"
