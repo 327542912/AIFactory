@@ -127,6 +127,10 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         v.attachSession(s)
         applyTheme(darkTheme)
         v.requestFocus()
+        // 新建的 TerminalView 不会自己重画已有缓冲：切页回来必须先强制刷两帧，
+        // 否则屏幕是空的，要等下一次输出（按一次回车）才出现内容。
+        v.post { v.onScreenUpdated() }
+        v.postDelayed({ v.onScreenUpdated() }, 250)
         v.post { v.requestFocus() }
     }
 
