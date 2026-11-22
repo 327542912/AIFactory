@@ -193,6 +193,7 @@ class AgentEngine(private val ctx: Context) {
                     history.put(JSONObject().put("role", "user").put("content",
                         "【执行闸门】你还没有做任何实际动作。不要只给方案：先用 toolchain_status/pipeline_status 看清现场，" +
                         "然后直接开始动手（写代码/跑命令/构建），失败就修，直到产出可安装的 APK 或明确写出阻塞证据。"))
+                    continue
                 }
 
                 val fenced = if (!nativeTools) FENCE.find(content) else null
