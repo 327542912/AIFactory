@@ -274,45 +274,41 @@ class AgentEngine(private val ctx: Context) {
         } finally { conn?.disconnect() }
     }
 
-    /** 反编译 APK：没有 jadx 就自己下官方包（bin-only 的 zip 解出 lib/*.jar 用 java -cp 跑）。 */
+    /** 反编译 APK：没有 jadx 就自己下官方包（zip 里的 lib/*.jar 用 java -cp 跑）。 */
     private suspend fun decompileApk(ctx: Context, apkPath: String, outArg: String): String = withContext(Dispatchers.IO) {
-        runCatching {
-            val apk = resolve(apkPath)
-            if (!apk.exists()) return@runCatching "找不到 APK：" + apkPath
-            val tools = File(RuntimePaths.home(ctx), ".aifactory/tools").apply { mkdirs() }
-            fun findJadx(): File? = tools.walkTopDown().firstOrNull { it.isFile && it.name.startsWith("jadx") && it.name.endsWith(".jar") }
-            var jar = findJadx()
-            if (jar == null) {
-                val dl = downloadUrl(
-                    "https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip",
-                    File(workspace, ".dl/jadx.zip").path, 80
-                )
-                if (!dl.startsWith("已下载")) return@runCatching "没有 jadx，自动下载失败：" + dl
-                java.util.zip.ZipInputStream(File(workspace, ".dl/jadx.zip").inputStream()).use { zin ->
-                    var e = zin.nextEntry
-                    while (e != null) {
-                        val n = e.name
-                        if (n.startsWith("lib/") && n.endsWith(".jar")) {
-                            val dest = File(tools, n.substringAfterLast('/'))
-                            dest.outputStream().use { os -> zin.copyTo(os) }
-                        }
-                        e = zin.nextEntry
+        val apk = resolve(apkPath)
+        if (!apk.exists()) return@withContext "找不到 APK：" + apkPath
+        val tools = File(RuntimePaths.home(ctx), ".aifactory/tools").apply { mkdirs() }
+        fun findJadx(): File = tools.listFiles()?.firstOrNull { f -> f.isFile && f.name.startsWith("jadx") && f.name.endsWith(".jar") }
+            ?: tools.listFiles()?.firstOrNull { f -> f.isFile && f.name.endsWith(".jar") }
+            ?: File(tools, "missing")
+        var jar = findJadx()
+        if (!jar.exists()) {
+            val zipPath = File(workspace, ".dl/jadx.zip")
+            zipPath.parentFile?.mkdirs()
+            val dl = downloadUrl("https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip", zipPath.path, 80)
+            if (!dl.startsWith("已下载")) return@withContext "没有 jadx，自动下载失败：" + dl
+            runCatching {
+                java.util.zip.ZipFile(zipPath).use { z ->
+                    val jars = z.entries().toList().filter { e -> !e.isDirectory && e.name.startsWith("lib/") && e.name.endsWith(".jar") }
+                    jars.forEach { e ->
+                        val dest = File(tools, e.name.substringAfterLast('/'))
+                        z.getInputStream(e).use { ins -> dest.outputStream().use { outs -> ins.copyTo(outs) } }
                     }
                 }
-                jar = findJadx()
-            }
-            if (jar == null) return@runCatching "jadx 的 lib 里没找到 jadx*.jar"
-            val out = if (outArg.isBlank()) File(workspace, "jadx-out") else resolve(outArg)
-            val java = File(RuntimePaths.prefix(ctx), "bin/java")
-            val pb = ProcessBuilder(
-                if (java.exists()) java.path else "java", "-Xmx1g",
-                "-cp", File(tools, "*").path + ":" + jar.path,
-                "jadx.cli.JadxCLI", "--no-res", "-d", out.path, apk.path
-            ).redirectErrorStream(true).start()
-            val text = pb.inputStream.bufferedReader().use { it.readText() }
-            val code = pb.waitFor()
-            "退出码 " + code + "\n" + text.takeLast(2000) + "\n输出目录：" + out.path
-        }.getOrElse { "反编译失败：" + (it.message ?: it.javaClass.simpleName) }
+            }.onFailure { return@withContext "解压 jadx 失败：" + it.message }
+            jar = findJadx()
+        }
+        if (!jar.exists()) return@withContext "jadx 解压后仍找不到 jar"
+        val out = if (outArg.isBlank()) File(workspace, "jadx-out") else resolve(outArg)
+        val java = File(RuntimePaths.prefix(ctx), "bin/java")
+        val pb = ProcessBuilder(
+            if (java.exists()) java.path else "java", "-Xmx1g",
+            "-cp", File(tools, "*").path, "jadx.cli.JadxCLI", "--no-res", "-d", out.path, apk.path
+        ).redirectErrorStream(true).start()
+        val text = pb.inputStream.bufferedReader().use { it.readText() }
+        val code = pb.waitFor()
+        "退出码 " + code + "\n" + text.takeLast(2000) + "\n输出目录：" + out.path
     }
 
     /** 解析 APK：包名/版本/权限/入口/最小 SDK + 文件清单。避免模型对二进制靠猜。 */
