@@ -5,7 +5,7 @@
 
 | # | 文件 | 体积 | sha256 | 直链 |
 |---|---|---|---|---|
-| 1 | App 安装包 `AIFactory-0.3.1-debug.apk` | 16,641,647 B | `90095dc6af08f5468612a0fec3ca974fdd7d18b361fc81b44d5a11b20f21d5d3` | `https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-latest.apk` |
+| 1 | App 安装包 `AIFactory-0.3.3-debug.apk` | 17,206,356 B | `69364b0c3565c499cab55229cd10ad20b51c7c7b2763cde6afa84412766c1677` | `https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-latest.apk` |
 | 2 | Runtime `bootstrap-aarch64.zip` | 29,611,216 B | `45730c16e8a7c852621f33a06ce1fa802cafcec0116b9f11940178aff6486343` | `https://github.com/327542912/AIFactory/releases/download/runtime-latest/bootstrap-aarch64.zip` |
 | 3 | Android SDK `android-sdk-aarch64.zip` | 143,210,636 B | `70d10e0a7f180a510134f904b43f4a0c9c7b9dcdcbcb927493b5c8a6a966faa3` | `https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip` |
 | 4 | Gradle 8.7 `gradle_8.7-1_all.deb` | 131,417,012 B | `027493b1bf4eb5a870074f6b3a32b25ffec6a628996700fefe75e632fc62ce09` | `https://github.com/327542912/AIFactory/releases/download/runtime-extra/gradle_8.7-1_all.deb` |
