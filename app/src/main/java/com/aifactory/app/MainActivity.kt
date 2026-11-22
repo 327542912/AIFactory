@@ -324,8 +324,9 @@ private fun ChatPage(
                             if (names.isNotEmpty()) "\n\n附件文件：\n" + names.joinToString("\n") else ""
                         input = ""
                         ChatRunner.draft = ""
-                        attachments.toList().forEach { onRemoveAttachment(it) }
-                        ChatRunner.send(ctx.applicationContext, agentMode, prompt)
+                        val attachNow = attachments.toList()
+                        attachments.forEach { onRemoveAttachment(it) }
+                        ChatRunner.send(ctx.applicationContext, agentMode, prompt, attachNow)
                     }) { Icon(Icons.Default.ArrowUpward, "发送", tint = Accent) }
                 }
                 Text(if (agentMode) "Agent 模式：可读写工作区文件、执行命令、构建并签名 APK；安装需你在系统弹窗确认。" else "普通对话模式：不调用任何工具。", Modifier.padding(start = 4.dp, top = 5.dp), color = Muted, fontSize = 10.sp)

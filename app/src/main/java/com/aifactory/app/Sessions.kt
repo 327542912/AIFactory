@@ -148,7 +148,24 @@ internal object ChatRunner {
         }
     }
 
-    fun send(ctx: Context, agentMode: Boolean, prompt: String) {
+    /** 把用户选的附件真正拷进工作区，Agent 才有路径可读；否则它只看到文件名，只能凭空回答。 */
+    private fun stageAttachments(ctx: Context, list: List<FileRecord>): String {
+        if (list.isEmpty()) return ""
+        val dir = File(RuntimePaths.workspace(ctx), ".attachments").apply { mkdirs() }
+        val lines = mutableListOf<String>()
+        list.forEach { rec ->
+            runCatching {
+                val dest = File(dir, rec.name.replace("/", "_"))
+                ctx.contentResolver.openInputStream(android.net.Uri.parse(rec.uri))?.use { ins ->
+                    dest.outputStream().use { outs -> ins.copyTo(outs) }
+                }
+                lines += "- " + dest.path + "（" + dest.length() + " B）"
+            }.onFailure { lines += "- " + rec.name + "（拷贝失败：" + it.message + "）" }
+        }
+        return if (lines.isEmpty()) "" else "\n\n已落地附件（可用 read_file/inspect_apk/decompile_apk 直接读）：\n" + lines.joinToString("\n")
+    }
+
+    fun send(ctx: Context, agentMode: Boolean, prompt: String, attach: List<FileRecord> = emptyList()) {
         if (busy) return
         val cfg = AppConfig(ctx)
         messages.add(ChatMessage("user", prompt))
@@ -163,10 +180,12 @@ internal object ChatRunner {
         val prior = messages.dropLast(1).takeLast(8).map { it.role to it.text }
         job = scope.launch {
             try {
+                val staged = withContext(Dispatchers.IO) { stageAttachments(ctx, attach) }
+                val fullPrompt = prompt + staged
                 if (agentMode) {
                     val agent = AgentEngine(ctx)
                     val t0 = System.currentTimeMillis()
-                    val answer = agent.run(prompt, cfg, prior) { ev -> main.post { messages.add(ChatMessage("assistant", ev)) } }
+                    val answer = agent.run(fullPrompt, cfg, prior) { ev -> main.post { messages.add(ChatMessage("assistant", ev)) } }
                     val sec = ((System.currentTimeMillis() - t0) / 100) / 10.0
                     messages.add(ChatMessage("assistant", answer, "用时 " + sec + "s · " + agent.lastStats))
                 } else {

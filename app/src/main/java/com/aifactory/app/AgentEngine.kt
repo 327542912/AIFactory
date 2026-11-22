@@ -100,6 +100,24 @@ class AgentEngine(private val ctx: Context) {
         appendLine("可以用 apt-get install / pip / npm 安装依赖。不要用 pkg（会改写软件源）。apt 的源是本项目自建仓库，只包含已发布的包；找不到时告诉用户把包名加入 GitHub 工作流的 repo_packages 重新发布。不要手动改 apt 源为官方 Termux 仓库（路径前缀不同，会损坏 Runtime）。")
         appendLine("删除、覆盖大量文件前先向用户说明。回答使用中文，简洁。")
         appendLine()
+        // 当前项目：用户一选中/新建，这里就有；模型不该再反问“在哪个项目里改”
+        val cur = WorkState.currentProject
+        if (cur != null) {
+            val dir = File(workspace, cur)
+            appendLine("【当前项目】" + cur + "  路径：" + dir.path + (if (dir.exists()) "" else "（目录不存在）"))
+            if (dir.exists()) {
+                val tree = dir.walkTopDown().filter { it.isFile }.map { it.relativeTo(dir).path }
+                    .filterNot { it.contains("/build/") || it.startsWith(".") }.take(30).toList()
+                if (tree.isNotEmpty()) appendLine("项目文件（前 30 个）：" + tree.joinToString(", "))
+                if (File(dir, "PRD.md").exists()) appendLine("这个项目有 PRD.md：动手前先 read_file 读它，按验收标准做。")
+            }
+            appendLine("用户说“改这个/继续做/打包出来”时，默认就指当前项目，不要再问是哪个项目。")
+        } else {
+            appendLine("【当前项目】未选择。若用户让改代码但没指明项目，先 list_dir 列出工作区再问一句，不要凭空假设。")
+        }
+        appendLine("【附件规则】用户上传的文件已落地到 .attachments/ 下（消息里会给绝对路径）。")
+        appendLine("APK 不要靠猜：先用 inspect_apk 看包名/权限/入口，需要源码就用 decompile_apk（没有 jadx 会自动下载）。")
+        appendLine("【终端规则】run_shell 就在 App 的 Runtime 里执行，和终端页、构建共用同一套文件系统与 PREFIX；工具结果第一行会标注执行环境。")
         appendLine("【当前流水线现场（每次对话开始时自动刷新）】")
         appendLine(Pipeline.snapshot(ctx).take(2500))
         val mem = File(RuntimePaths.home(ctx), ".aifactory/memory.md")

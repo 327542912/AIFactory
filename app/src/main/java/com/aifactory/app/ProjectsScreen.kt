@@ -68,6 +68,10 @@ fun ProjectsScreen() {
     val rt = remember { RuntimeEngine(ctx) }
     val pk = remember { Packager(ctx, rt) }
     val scope = rememberCoroutineScope()
+    // 只有一个项目时直接选中并登记为“当前项目”，避免 Agent 反问“在哪个项目里改”
+    LaunchedEffect(Unit) {
+        if (projects.size == 1) { selected = projects[0]; WorkState.currentProject = projects[0] }
+    }
     var projects by remember { mutableStateOf(listProjects(rt)) }
     var selected by remember { mutableStateOf<String?>(null) }
     // 新建项目向导：方向 → 名字 → 需求 → PRD 预览 → 确认创建
@@ -168,6 +172,7 @@ fun ProjectsScreen() {
                                 val made = ProjectScaffold.create(rt.workspace, nm, kind, newBrief)
                                 projects = listProjects(rt)
                                 selected = nm
+                                WorkState.currentProject = nm
                                 Pipeline.appendNote("已创建 $nm（${kind.label}）：" + made.joinToString(", "))
                                 showNew = false
                                 prdPreview = null
@@ -199,7 +204,7 @@ fun ProjectsScreen() {
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(projects) { p ->
-                    FilterChip(selected = selected == p, onClick = { selected = p }, label = { Text(p) })
+                    FilterChip(selected = selected == p, onClick = { selected = p; WorkState.currentProject = p }, label = { Text(p) })
                 }
             }
         }
