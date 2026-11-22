@@ -83,6 +83,20 @@ class AppConfig(context: Context) {
         set(v) = put("mirror_prefix", v)
 
     /** 发布签名密钥口令：首次使用时随机生成，只保存在应用私有存储。 */
+    /** GitHub 发布：仓库写 owner/repo，token 需要 repo 权限。 */
+    var ghRepo: String
+        get() = get("gh_repo", "")
+        set(v) = put("gh_repo", v.trim())
+
+    var ghToken: String
+        get() = get("gh_token", "")
+        set(v) = put("gh_token", v.trim())
+
+    /** 版本号由项目名 + 时间戳生成，默认沿用。 */
+    var ghTagPrefix: String
+        get() = get("gh_tag", "build")
+        set(v) = put("gh_tag", v.trim())
+
     val keystorePassword: String
         get() {
             var v = p.getString("ks_pass", null)

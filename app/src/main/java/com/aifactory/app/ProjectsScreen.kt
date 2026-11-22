@@ -216,6 +216,20 @@ fun ProjectsScreen() {
                 Pipeline.buildProject(ctx, pk, File(rt.workspace, name), false, install = true)
             }) { Text("构建并安装") }
             Button(enabled = selected != null && !busy, onClick = { runBuild(true) }) { Text("构建 Release（签名）") }
+            OutlinedButton(enabled = selected != null && !busy, onClick = {
+                val name = selected ?: return@OutlinedButton
+                val cfg = AppConfig(ctx)
+                val dir = File(rt.workspace, name)
+                Pipeline.submit(ctx, "发布 $name 到 GitHub", listOf("构建", "打源包", "推送", "上传 Release")) { report ->
+                    val br = pk.build(dir, false)
+                    report("【构建】" + if (br.ok) "通过 " + (br.apk?.path ?: "") else "失败：" + br.message)
+                    if (!br.ok) return@submit "构建没通过，先修构建再发布。\n" + tailText(br.log, 4000)
+                    val prd = File(dir, "PRD.md")
+                    val notes = (if (prd.exists()) prd.readText().take(2000) else "自动构建发布 " + name)
+                    val r = Publisher.publish(ctx, cfg, dir, br.apk, notes) { line -> report(line) }
+                    if (r.ok) "✅ " + r.summary + "\n" + (r.releaseUrl ?: "") else "❌ " + r.summary
+                }
+            }) { Text("发布到 GitHub") }
             if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
             TextButton(onClick = {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
