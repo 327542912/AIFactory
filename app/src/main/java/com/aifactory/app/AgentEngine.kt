@@ -439,7 +439,11 @@ class AgentEngine(private val ctx: Context) {
         // 相对路径优先落在「当前项目」里：模型写 app/src/main/... 时是想改当前工程，
         // 不是想在 workspace 根下再造一个 app/（之前就是这么把文件写歪的）
         val cur = WorkState.currentProject
-        val base = if (!p.startsWith("/") && cur != null && cur.isNotBlank()) File(workspace, cur) else workspace
+        val rel = p.trim()
+        val first = rel.substringBefore('/')
+        val alreadyInProject = cur != null && (first == cur || rel.startsWith(cur + "/"))
+        val base = if (!p.startsWith("/") && cur != null && cur.isNotBlank() && !alreadyInProject)
+            File(workspace, cur) else workspace
         val f = if (p.startsWith("/")) File(p) else File(base, p)
         val c = f.canonicalFile
         val root = workspace.canonicalFile
@@ -450,7 +454,11 @@ class AgentEngine(private val ctx: Context) {
     private suspend fun runTool(name: String, a: JSONObject): String = try {
         when (name) {
             "run_shell" -> {
-                val cmd = a.optString("command")
+                val rawCmd = a.optString("command")
+                // 模型常把 "ls -la ./app/build/res/" 写成 "ls -la .\ /app\ /build\ /res\ /"，
+                // 每段路径变成独立参数，必然 No such file。这里还原后再执行，并在结果里说明改了什么。
+                val cmd = rawCmd.replace("\\ ", "").replace("\\/", "/")
+                val rewritten = cmd != rawCmd
                 if (DANGEROUS.containsMatchIn(cmd)) "已拒绝：该命令可能删除系统或 Runtime 目录。"
                 else {
                     val cwd = a.optString("cwd").takeIf { it.isNotBlank() }?.let { resolve(it) } ?: workspace
@@ -463,10 +471,12 @@ class AgentEngine(private val ctx: Context) {
                     }
                     // 明确告知在哪执行：装好 Runtime 是本机 bash；没装会退化成系统 /system/bin/sh（能力差很多）
                     val head = if (rt.isInstalled())
-                        "【执行环境】本机 Runtime（bash @" + RuntimePaths.prefix(ctx).path + "，工作目录 " + cwd.path + "）"
+                        "【执行环境】本机 Runtime 私有 bash（@" + RuntimePaths.prefix(ctx).path + "，工作目录 " + cwd.path +
+                            "；这条会话不显示在终端页，终端页那个 bash 是另一条独立进程）"
                     else
                         "【执行环境】系统 sh（Runtime 未安装：命令跑在 /system/bin/sh，没有 bash/coreutils/java；本次结果不代表完整 Runtime）"
-                    head + "\n$status\n" + tailText(r.output.ifBlank { "(没有输出)" }, 10000)
+                    (if (rewritten) "【已清理命令】原文有 \"\\ \" 转义，已还原为：" + cmd + "\n" else "") +
+                        head + "\n$status\n" + tailText(r.output.ifBlank { "(没有输出)" }, 10000)
                 }
             }
             "read_file" -> {

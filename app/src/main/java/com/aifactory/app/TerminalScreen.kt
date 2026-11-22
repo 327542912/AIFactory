@@ -21,7 +21,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -129,9 +131,17 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         v.requestFocus()
         // 新建的 TerminalView 不会自己重画已有缓冲：切页回来必须先强制刷两帧，
         // 否则屏幕是空的，要等下一次输出（按一次回车）才出现内容。
+        // 卡在文本选择模式时 TerminalView 会吞掉所有输入（点屏幕也不弹键盘），
+        // 表现为"终端完全没反应"。每次挂载先清掉这个状态。
+        runCatching { v.stopTextSelectionMode() }
         v.post { v.onScreenUpdated() }
         v.postDelayed({ v.onScreenUpdated() }, 250)
         v.post { v.requestFocus() }
+        v.postDelayed({ v.requestFocus() }, 120)
+        v.postDelayed({
+            val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            if (!imm.isActive(v)) imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+        }, 260)
     }
 
     /** 离开终端页只解绑视图，bash 会话继续活着，回来时 attachSession 会把整屏缓冲重新画出来。 */
@@ -201,6 +211,13 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         v.requestFocus()
         val imm = ctx.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+        // 部分 ROM（MIUI/ColorOS）首次 showSoftInput 会被窗口焦点吞掉，补一次延迟重试
+        v.postDelayed({
+            if (!imm.isActive(v)) {
+                v.requestFocus()
+                imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }, 150)
     }
 
     fun send(seq: String) {
@@ -278,7 +295,9 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         return 1.0f
     }
     override fun onSingleTapUp(e: MotionEvent) {
-        if (isTerminalSelecting()) return
+        // 之前这里遇到 isSelectingText() 就直接 return，用户点屏幕毫无反馈，看起来像终端死了。
+        // 现在：先退出选择模式，再无条件弹键盘。
+        runCatching { view?.stopTextSelectionMode() }
         showKeyboard()
     }
 
@@ -347,6 +366,8 @@ fun TerminalPage(host: TerminalHost, dark: Boolean = false, onGoSettings: () -> 
     DisposableEffect(Unit) { onDispose { host.all().forEach { it.detachView() } } }
     LaunchedEffect(dark) { host.all().forEach { it.setDark(dark) } }
     LaunchedEffect(active) { bridge.setDark(dark) }
+    var showInput by remember { mutableStateOf(false) }
+    var inputText by remember { mutableStateOf("") }
     val problem by produceState(initialValue = bridge.problem) {
         while (true) { value = bridge.problem; kotlinx.coroutines.delay(500) }
     }
@@ -445,6 +466,29 @@ fun TerminalPage(host: TerminalHost, dark: Boolean = false, onGoSettings: () -> 
             }
         }
 
+        if (showInput) AlertDialog(
+            onDismissRequest = { showInput = false },
+            title = { Text("输入到终端") },
+            text = {
+                Column {
+                    Text("软键盘不弹时用这个：直接写进当前 bash，回车即执行。", fontSize = 11.sp, color = Muted)
+                    OutlinedTextField(
+                        inputText, { inputText = it }, singleLine = false,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        placeholder = { Text("例如 ls -la") }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val t = inputText
+                    showInput = false
+                    inputText = ""
+                    if (t.isNotBlank()) { bridge.send(t); bridge.send("\r") }
+                }) { Text("执行") }
+            },
+            dismissButton = { TextButton(onClick = { showInput = false }) { Text("取消") } }
+        )
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                 .padding(horizontal = 6.dp, vertical = 4.dp),
@@ -465,6 +509,7 @@ fun TerminalPage(host: TerminalHost, dark: Boolean = false, onGoSettings: () -> 
             termKey("HOME") { bridge.send("\u001b[H") }
             termKey("END") { bridge.send("\u001b[F") }
             termKey("键盘") { bridge.showKeyboard() }
+            termKey("输入行") { showInput = true }
         }
     }
 }
