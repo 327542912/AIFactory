@@ -376,10 +376,10 @@ private fun GitHubCard() {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("发布：GitHub", fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(repo, { repo = it; cfg.ghRepo = it }, label = { Text("仓库 owner/repo") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(repo, { repo = it; cfg.ghRepo = it }, label = { Text("仓库 owner/repo（留空=自动新建同名仓库）") }, placeholder = { Text("留空即可，首次发布会自动建仓库") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(token, { token = it; cfg.ghToken = it }, label = { Text("Token（需 repo 权限）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(tag, { tag = it; cfg.ghTagPrefix = it }, label = { Text("tag 前缀（默认 build）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            Text("在「项目」页点「发布到 GitHub」：构建 debug APK → 打源码 zip → 建 Release → 上传两个附件。Token 存应用私有存储。", fontSize = 11.sp, color = Muted)
+            Text("仓库留空时：按 Token 读账号名，用项目名自动新建 public 仓库并回填到上面。也可手填已有 owner/repo。Token 存应用私有存储。", fontSize = 11.sp, color = Muted)
             Text("Google Play：本机做不到自动上架。Play 只收 AAB（需要 bundletool 与 JDK 的签名链），且必须有 Play 开发者账号与服务账号 JSON、过审。当前版本不提供该通道，硬要做要在 CI 里跑（GitHub Actions 已经能做，见仓库 master 分支工作流）。", fontSize = 11.sp, color = Muted)
         }
     }

@@ -33,10 +33,27 @@ object Publisher {
         notes: String,
         onLog: (String) -> Unit
     ): Result {
-        val repo = cfg.ghRepo.trim()
         val token = cfg.ghToken.trim()
-        if (repo.isEmpty() || token.isEmpty()) {
-            return Result(false, "没有配置 GitHub 仓库或 Token（设置 → GitHub 发布）。", null)
+        if (token.isEmpty()) return Result(false, "没有配置 GitHub Token（设置 → 发布：GitHub）。", null)
+        var repo = cfg.ghRepo.trim()
+        // 留空 = 自动在当前账号下新建同名仓库（仓库名取项目名），成功后回填到设置里
+        if (repo.isEmpty()) {
+            val login = request("GET", "$API/user", token, null, "application/json", onLog)?.optString("login", "")
+            if (login.isNullOrBlank()) return Result(false, "读不到 GitHub 账号信息，检查 Token 是否有效。", null)
+            val repoName = projectDir.name.lowercase().replace(Regex("[^a-z0-9._-]"), "-").trim('-').ifBlank { "aifactory-app" }
+            repo = login + "/" + repoName
+            val exists = request("GET", "$API/repos/$repo", token, null, "application/json", { })
+            if (exists == null) {
+                onLog("仓库 $repo 不存在，自动新建（public）…")
+                val made = request("POST", "$API/user/repos", token,
+                    ("{\"name\":\"" + repoName + "\",\"private\":false,\"auto_init\":true}").toByteArray(),
+                    "application/json", onLog)
+                if (made == null) return Result(false, "自动新建仓库失败：$repo", null)
+                onLog("已新建仓库：https://github.com/$repo")
+            } else {
+                onLog("使用已有仓库：$repo")
+            }
+            cfg.ghRepo = repo
         }
         if (!repo.contains("/")) return Result(false, "仓库要写成 owner/repo，现在是：$repo", null)
 
