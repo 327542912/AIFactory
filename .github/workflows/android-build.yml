@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - app-0.2.2
       - aifactory-complete-implementation-20261121
     paths:
       - "app/**"
