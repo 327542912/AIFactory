@@ -8,6 +8,7 @@ import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -232,22 +233,31 @@ fun TerminalPage(bridge: AiTerminalBridge, onGoSettings: () -> Unit = {}) {
             TextButton(onClick = { bridge.pasteFromClipboard() }) { Text("粘贴", fontSize = 12.sp) }
         }
 
-        problem?.let { msg ->
-            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
-                Text(msg, fontSize = 12.sp, color = Color(0xFFB4553C))
-                Row(Modifier.padding(top = 6.dp)) {
-                    TextButton(onClick = onGoSettings) { Text("去设置重装 Runtime", fontSize = 12.sp) }
-                    TextButton(onClick = { bridge.restart() }) { Text("已重装，重试", fontSize = 12.sp) }
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { c: Context ->
+                    TerminalView(c, null).also { v -> bridge.attachView(v) }
+                }
+            )
+            if (problem != null) {
+                Column(
+                    Modifier.fillMaxSize().padding(18.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("终端会话没有启动", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color(0xFFB4553C))
+                    Text(
+                        "因此屏幕上没有提示符，也没有可输入的行，键盘打字不会有任何反应。",
+                        fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Text(problem ?: "", fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
+                    Row(Modifier.padding(top = 10.dp)) {
+                        TextButton(onClick = onGoSettings) { Text("去设置重装 Runtime", fontSize = 12.sp) }
+                        TextButton(onClick = { bridge.restart() }) { Text("重试", fontSize = 12.sp) }
+                    }
                 }
             }
         }
-
-        AndroidView(
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            factory = { c: Context ->
-                TerminalView(c, null).also { v -> bridge.attachView(v) }
-            }
-        )
 
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
