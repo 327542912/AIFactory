@@ -52,6 +52,8 @@ internal object Pipeline {
     var queued by mutableStateOf(0); private set
     var busy by mutableStateOf(false); private set
     var lastApk by mutableStateOf<File?>(null); private set
+    /** 最近一次构建产物自检解析出的包名，安装后用它确认是否真的装上了。 */
+    var lastPkg by mutableStateOf<String?>(null); private set
 
     fun submit(
         ctx: Context,
