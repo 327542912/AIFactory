@@ -45,6 +45,27 @@ fi
 # 旧前缀清干净后，确认新前缀确实在（防止 sed 啥也没匹配还报成功）
 grep -rla "$NEW" . >/dev/null || { echo "::error::$NEW not found at all"; exit 1; }
 
+# 软件源：官方 Termux 源的包前缀是 /data/data/com.termux，装进本 runtime 会得到
+# 错路径的二进制。默认停用它，只留 AIFactory 自己的源。
+REPO_URL="${RUNTIME_REPO_URL:-}"
+if [ -n "$REPO_URL" ]; then
+	SL="etc/apt/sources.list"
+	if [ -f "$SL" ]; then
+		sed -i 's|^\(deb[[:space:]].*\)$|# \1|' "$SL"
+	else
+		mkdir -p "$(dirname "$SL")"
+		: > "$SL"
+	fi
+	{
+		echo "# AIFactory runtime apt source"
+		echo "# 官方 Termux 源已故意停用：其包内前缀为 /data/data/com.termux"
+		echo "deb [trusted=yes] $REPO_URL ./"
+		cat "$SL"
+	} > "$SL.new"
+	mv "$SL.new" "$SL"
+	echo "sources.list -> $REPO_URL"
+fi
+
 cd "$WORK"
 ( cd "$WORK/t" && zip -q -r -X "$WORK/out.zip" . )
 unzip -tq "$WORK/out.zip" >/dev/null
