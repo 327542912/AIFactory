@@ -58,8 +58,10 @@ if [ -n "$REPO_URL" ]; then
 	fi
 	{
 		echo "# AIFactory runtime apt source"
-		echo "# 官方 Termux 源已故意停用：其包内前缀为 /data/data/com.termux"
+		echo "# 官方 Termux 源已故意停用：其包内前缀是 Termux 自己的目录"
 		echo "deb [trusted=yes] $REPO_URL ./"
+		echo "# 补充源（Gradle 8.7 等），主流水线重建不会覆盖它"
+		[ -n "${RUNTIME_EXTRA_URL:-}" ] && echo "deb [trusted=yes] $RUNTIME_EXTRA_URL ./"
 		cat "$SL"
 	} > "$SL.new"
 	mv "$SL.new" "$SL"
