@@ -12,6 +12,16 @@
   <img src="docs/images/settings.webp" width="360" alt="AIFactory 设置页">
 </div>
 
+## 直接下载 APK
+
+| 渠道 | 地址 | 备注 |
+|---|---|---|
+| **仓库内文件**（手机点开即下） | [`apk/AIFactory-latest.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-latest.apk) | 固定路径，每次构建覆盖更新，链接永不失效 |
+| 带版本号的文件 | [`apk/AIFactory-0.2.2-debug.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-0.2.2-debug.apk) | 存档用 |
+| Release 资产 | [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | 与上面同一份文件，附 `.sha256` |
+
+> debug 签名，仅供自用；同包名同签名可直接覆盖安装，`/data/data/com.aifactory.app` 里的 Runtime 不会丢。
+
 ---
 
 ## 这是什么
