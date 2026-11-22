@@ -446,7 +446,7 @@ private fun PluginsPage() {
 private fun SettingsPage() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("AIFactory 0.2.0 · 独立 Runtime · Android AI Development Workspace", color = Muted)
+        Text("AIFactory ${BuildConfig.VERSION_NAME} · 独立 Runtime · Android AI Development Workspace", color = Muted)
         RuntimeSetupCard()
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(16.dp)) {
