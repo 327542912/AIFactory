@@ -55,6 +55,9 @@ internal object Pipeline {
     /** 最近一次构建产物自检解析出的包名，安装后用它确认是否真的装上了。 */
     var lastPkg by mutableStateOf<String?>(null); private set
 
+    /** 最近一次任务的完整日志文件（已落盘，可直接复制/导出）。 */
+    var lastLog by mutableStateOf<File?>(null); private set
+
     fun submit(
         ctx: Context,
         title: String,
@@ -135,8 +138,20 @@ internal object Pipeline {
         }
 
         val ok = !result.startsWith("失败")
+        val full = log + "\n" + (if (ok) "✅ " else "❌ ") + result
         record(ctx, t.title, ok, System.currentTimeMillis() - started, result)
-        main.post { log = log + "\n" + (if (ok) "✅ " else "❌ ") + result }
+        // 完整日志落盘：按时间命名，保留最近 200 个，切页/重启都不丢
+        val saved = runCatching {
+            val dir = File(RuntimePaths.home(ctx), ".aifactory/logs").apply { mkdirs() }
+            val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+            val name = stamp + "-" + t.title.replace(Regex("[^\p{L}\p{N}]+"), "_") + ".log"
+            val f = File(dir, name)
+            f.writeText("title: " + t.title + "\nok: " + ok + "\nms: " + (System.currentTimeMillis() - started) +
+                "\n\n" + full)
+            dir.listFiles()?.sortedByDescending { it.name }?.drop(200)?.forEach { it.delete() }
+            f
+        }.getOrNull()
+        main.post { log = full; lastLog = saved }
     }
 
     private fun record(ctx: Context, title: String, ok: Boolean, ms: Long, summary: String) {

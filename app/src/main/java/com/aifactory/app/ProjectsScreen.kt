@@ -88,6 +88,22 @@ fun ProjectsScreen() {
             }
         }
     }
+    val logExporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri: Uri? ->
+        if (uri != null) scope.launch(Dispatchers.IO) {
+            try {
+                val src = Pipeline.lastLog
+                ctx.contentResolver.openOutputStream(uri)?.use { o ->
+                    if (src != null && src.exists()) src.inputStream().use { it.copyTo(o) }
+                    else o.write(Pipeline.log.toByteArray())
+                }
+                Pipeline.appendNote("日志已导出。")
+            } catch (e: Exception) {
+                Pipeline.appendNote("日志导出失败：${e.message}")
+            }
+        }
+    }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) scope.launch {
             Pipeline.appendNote(importArchive(ctx, rt, uri))
@@ -131,6 +147,11 @@ fun ProjectsScreen() {
             }) { Text("构建并安装") }
             Button(enabled = selected != null && !busy, onClick = { runBuild(true) }) { Text("构建 Release（签名）") }
             if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
+            TextButton(onClick = {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("aifactory-log", Pipeline.log))
+                Pipeline.appendNote("已复制日志（" + Pipeline.log.length + " 字）到剪贴板")
+            }) { Text("复制日志") }
         }
         if (busy) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -163,6 +184,13 @@ fun ProjectsScreen() {
                 log.ifBlank { "构建日志会显示在这里。" },
                 Modifier.verticalScroll(rememberScrollState()).padding(12.dp),
                 fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 15.sp
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { logExporter.launch("aifactory-build.log") }) { Text("导出日志") }
+            Text(
+                Pipeline.lastLog?.let { "存档：" + it.name } ?: "日志未存档",
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
             )
         }
         Text(

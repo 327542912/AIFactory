@@ -110,9 +110,9 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         // 失败且是 Gradle 工程时才回退到 gradle（那条路径需要能访问 Google Maven）。
         val hasAppLayout = File(root, "app/src/main/AndroidManifest.xml").exists()
         if (hasAppLayout) {
-            val plain = buildPlain(root, onOutput)
-            if (plain.ok || !isGradleProject(root)) return plain
-            onOutput?.invoke("本地工具链失败，回退 Gradle：\n" + tailText(plain.log, 2000))
+            // 只走本地链。之前「失败自动回退 Gradle」会把真正的失败原因埋进日志前面，
+            // 用户看到的是 gradle 的第二层错误，等于把根因藏了——这里不再回退。
+            return buildPlain(root, onOutput)
         }
         val missing = missingTools(root)
         if (missing.isNotEmpty()) {
