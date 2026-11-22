@@ -242,7 +242,7 @@ JDK 21 (temurin) + `setup-android` + `sdkmanager platforms;android-34 build-tool
 |---|---|---|
 | `main`（默认分支） | 只有 README + 文档 | 仓库门面；`workflow_dispatch` 要求 workflow 文件在默认分支 |
 | `master` | runtime 构建流水线 + 补丁脚本 | 真正的 CI |
-| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK。**分支名沿用历史，代码已是 0.3.5**；推送即构建 |
+| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK。**分支名沿用历史，代码已是 0.4.0**；推送即构建 |
 | `aifactory-*` | 历史快照 | 存档，App 仍为 0.1.0 / targetSdk 34，**不要直接用** |
 
 Key 文件：
@@ -273,7 +273,7 @@ app/src/main/java/com/aifactory/app/
 | [`runtime-extra`](https://github.com/327542912/AIFactory/releases/tag/runtime-extra) | `gradle_8.7-1_all.deb` + `Packages`（手动维护） | `gradle 1.9.0.0` 替代品，131,417,012 B，sha256 `027493b1…3ce09`；流水线不碰它 |
 | [`downloads`](https://github.com/327542912/AIFactory/releases/tag/downloads) | `DOWNLOAD.md`（下载总表） | 四个大文件的直链 + sha256 + 装法，不含二进制 |
 | [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 143,210,636 B，sha256 `70d10e0a…6faa3`（3 个 platform + 3 个 build-tools + arm64 adb） |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.3.5-debug.apk` + `AIFactory-latest.apk` + 各自 `.sha256` | 覆盖升级用固定签名；每次构建自动替换 |
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.4.0-debug.apk` + `AIFactory-latest.apk` + 各自 `.sha256` | 覆盖升级用固定签名；每次构建自动替换 |
 
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
 
@@ -325,7 +325,7 @@ app/src/main/java/com/aifactory/app/
 - [x] JDK 21 / git / apksigner / zip / unzip 进 `runtime-repo`（264 个 deb，前缀全部核对过 0 处 `com.termux`）
 - [x] Gradle 8.7 走独立 `runtime-extra` 源（绕开主源的 1.9.0.0）
 - [x] Android SDK 单一 zip 覆盖 34/35/36 + arm64 adb
-- [x] 固定签名 keystore：0.2.3 → 0.3.5 指纹一致（`05fc565e…`），可覆盖升级不丢 `/data/data` 数据
+- [x] 固定签名 keystore：0.2.3 → 0.4.0 指纹一致（`05fc565e…`），可覆盖升级不丢 `/data/data` 数据
 - [x] `scripts/device-build.sh`：设备端构建 → 验签 → 安装（Shizuku）→ 启动 → 扫 `FATAL EXCEPTION`
 - [ ] 设备端真跑通一次 `gradle assembleDebug`（脚本已就位，等你手机上跑）
 - [ ] arm64 版 Android SDK 打包
@@ -347,3 +347,11 @@ app/src/main/java/com/aifactory/app/
 ```
 
 四项全部可用。JDK 能装上的关键在四点：先 `dpkg -P apt-ftptarchive apt-transport-tor db` 清掉缺 `libdb`/`tor` 的坏包；再 `dpkg -i --force-depends` 装 `libandroid-shmem` / `libandroid-spawn` / `libjpeg-turbo` / `littlecms` 四个 `.so`；最后 `dpkg --configure -a` 让 `openjdk-21` 的 `postinst` 用 `update-alternatives` 建 `bin/java`。装 `apt` 包时它会覆盖 `etc/apt/sources.list` 成官方 `packages-cf.termux.dev`，必须立刻用 `echo 'deb [trusted=yes] file:///data/data/com.aifactory.app/files/localrepo ./' > $PREFIX/etc/apt/sources.list` 改回。
+
+### 全局调度（0.4.0）
+
+此前是四个互不相干的执行体：`ChatRunner`（对话）、`PluginRunner`（apt 装插件）、`SetupRunner`（runtime/SDK/deb）、`ProjectsScreen` 里的 `rememberCoroutineScope` 局部 job（构建）。它们只靠互斥互相躲（避免抢 dpkg 锁），没有队列、没有阶段、没有产物登记；项目构建还挂在页面作用域上，切页即被取消。
+
+0.4.0 新增 `Pipeline.kt`：单一串行调度器。所有长任务排同一条队列，同一时刻只跑一个，阶段与日志落盘 `home/.aifactory/jobs.json`，产物登记 `Pipeline.lastApk`。`ProjectsScreen` 的构建、`AgentEngine.build_apk` 都走它，所以切页不丢、不取消，也不会和排队的 apt 抢锁。
+
+仍未做（按优先级）：① 全局 `ProjectContext`（当前项目/包名/最近产物）让对话、项目、文件、打包页共享同一份真相；② 产物中心（outputs 里 APK 统一登记名字/大小/sha256/来源任务）；③ 流程模板（新建工程→构建→签名做成可点选 chain），目前只靠模型即兴组合工具。
