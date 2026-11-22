@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,7 +35,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.termux.terminal.TerminalSession
+import com.termux.terminal.TerminalColors
 import com.termux.terminal.TerminalSessionClient
+import com.termux.terminal.TextStyle
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import java.io.File
@@ -54,7 +57,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
 
     /** Termux 的调色板是按黑底设计的，不按主题切换会出现「白底浅字看不见」。 */
     fun applyTheme(dark: Boolean) {
-        val p = com.termux.terminal.TerminalColors.COLOR_SCHEME.mDefaultColors
+        val p = TerminalColors.COLOR_SCHEME.mDefaultColors
         if (dark) {
             p[0] = argb(0xFF111111); p[1] = argb(0xFFE06C75); p[2] = argb(0xFF98C379)
             p[3] = argb(0xFFD19A66); p[4] = argb(0xFF61AFEF); p[5] = argb(0xFFC678DD)
@@ -62,9 +65,9 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
             p[8] = argb(0xFF7A7A7A); p[9] = argb(0xFFFF8A8A); p[10] = argb(0xFFB8E994)
             p[11] = argb(0xFFF2C46B); p[12] = argb(0xFF7EC8FF); p[13] = argb(0xFFE3A5F0)
             p[14] = argb(0xFF7FE3EE); p[15] = argb(0xFFFFFFFF)
-            p[com.termux.terminal.TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFFE6E4DF)
-            p[com.termux.terminal.TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFF171715)
-            p[com.termux.terminal.TextStyle.COLOR_INDEX_CURSOR] = argb(0xFFE6E4DF)
+            p[TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFFE6E4DF)
+            p[TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFF171715)
+            p[TextStyle.COLOR_INDEX_CURSOR] = argb(0xFFE6E4DF)
         } else {
             p[0] = argb(0xFF1B1B1B); p[1] = argb(0xFFA52019); p[2] = argb(0xFF2E6B32)
             p[3] = argb(0xFF8A6A00); p[4] = argb(0xFF14539C); p[5] = argb(0xFF8A2E9E)
@@ -72,9 +75,9 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
             p[8] = argb(0xFF444444); p[9] = argb(0xFFC62828); p[10] = argb(0xFF2E7D32)
             p[11] = argb(0xFF8D6E00); p[12] = argb(0xFF1565C0); p[13] = argb(0xFF9C27B0)
             p[14] = argb(0xFF00777E); p[15] = argb(0xFF212121)
-            p[com.termux.terminal.TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFF1B1B1B)
-            p[com.termux.terminal.TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFFFFFFFF)
-            p[com.termux.terminal.TextStyle.COLOR_INDEX_CURSOR] = argb(0xFF1B1B1B)
+            p[TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFF1B1B1B)
+            p[TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFFFFFFFF)
+            p[TextStyle.COLOR_INDEX_CURSOR] = argb(0xFF1B1B1B)
         }
         view?.let { v ->
             v.mEmulator?.mColors?.reset()
