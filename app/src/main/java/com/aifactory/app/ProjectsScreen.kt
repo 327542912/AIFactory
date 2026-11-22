@@ -143,6 +143,24 @@ fun ProjectsScreen() {
             OutlinedButton(onClick = { importer.launch(arrayOf("*/*")) }) { Text("导入源码包") }
             OutlinedButton(onClick = { projects = listProjects(rt) }) { Text("刷新") }
         }
+        if (apk != null) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("最近产物", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Text(apk.path, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 16.sp)
+                    Text("体积 " + apk.length() + " B · 包名 " + (Pipeline.lastPkg ?: "?"), fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            Pipeline.submit(ctx, "安装最近产物", listOf("安装")) { report ->
+                                Installer.install(ctx, apk, Pipeline.lastPkg) { line -> report(line) }
+                            }
+                        }) { Text("安装") }
+                        OutlinedButton(onClick = { exporter.launch(apk.name) }) { Text("导出 APK") }
+                    }
+                }
+            }
+        }
         if (showNew) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

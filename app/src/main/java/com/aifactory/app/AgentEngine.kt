@@ -529,7 +529,9 @@ class AgentEngine(private val ctx: Context) {
                 "已记下。"
             }
             "build_apk" -> {
-                val dir = resolve(a.getString("project"))
+                val projArg = a.optString("project").ifBlank { WorkState.currentProject ?: "" }
+                if (projArg.isBlank()) return "没有指定项目，也没有当前项目。先 list_dir 看工作区，或让用户在项目页选中项目。"
+                val dir = resolve(projArg)
                 val release = a.optString("release").equals("true", ignoreCase = true)
                 // 排进全局串行队列：避免与排队中的构build/apt 抢同一目录与进程
                 val r = Pipeline.exclusive { packager.build(dir, release) }

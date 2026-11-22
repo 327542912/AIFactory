@@ -107,10 +107,18 @@ internal object Pipeline {
             try {
                 val res = pk.build(dir, release) { chunk -> report(chunk) }
                 if (res.ok) {
-                    main.post { lastApk = res.apk; lastPkg = res.pkg }
-                    val msg = "构建成功：" + (res.apk?.name ?: "?") + "（" + ((res.apk?.length() ?: 0L) / 1024) + " KB）"
-                    if (install && res.apk != null) {
-                        msg + "\n" + Installer.install(ctx, res.apk, res.pkg) { line -> appendNote(line) }
+                    // 产物统一收进 files/outputs：项目页/文件中心/导出都从这里取，不再藏在 app/build 里
+                    val apkSrc = res.apk
+                    val outDir = RuntimePaths.outputs(ctx).apply { mkdirs() }
+                    val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+                    val dest = if (apkSrc != null) File(outDir, dir.name + "-" + (if (release) "release-" else "debug-") + stamp + ".apk") else null
+                    runCatching { if (apkSrc != null && dest != null) apkSrc.copyTo(dest, overwrite = true) }
+                    val finalApk = if (dest != null && dest.exists()) dest else apkSrc
+                    main.post { lastApk = finalApk; lastPkg = res.pkg }
+                    report("产物已存档：" + (finalApk?.path ?: "无"))
+                    val msg = "构建成功：" + (finalApk?.name ?: "?") + "（" + ((finalApk?.length() ?: 0L) / 1024) + " KB）\n绝对路径：" + (finalApk?.path ?: "无")
+                    if (install && finalApk != null) {
+                        msg + "\n" + Installer.install(ctx, finalApk, res.pkg) { line -> appendNote(line) }
                     } else msg
                 } else {
                     res.message + "\n--- 日志末尾 ---\n" + tailText(res.log, 4000)
