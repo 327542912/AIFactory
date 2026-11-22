@@ -9,7 +9,7 @@
 ![runtime](https://img.shields.io/badge/runtime-Termux%20fork%20(no%20proot)-orange)
 
 <p align="center">
-  <img src="docs/images/settings.jpg" width="360" alt="AIFactory 设置页">
+  <img src="docs/images/settings.webp" width="360" alt="AIFactory 设置页">
 </div>
 
 ---
