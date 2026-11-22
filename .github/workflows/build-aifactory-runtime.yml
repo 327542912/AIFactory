@@ -306,6 +306,16 @@ jobs:
           ls -lh "$ZIP"
           unzip -t "$ZIP" | tail -2
 
+      - name: Normalize bootstrap prefix leftovers
+        run: |
+          if [ -f .github/scripts/normalize-bootstrap-prefix.sh ]; then
+            ZIP=$(find termux-packages -maxdepth 2 -name 'bootstrap-aarch64.zip' -type f | head -1)
+            if [ -z "$ZIP" ]; then echo "::error::no zip to normalize"; exit 1; fi
+            bash .github/scripts/normalize-bootstrap-prefix.sh "$ZIP"
+          else
+            echo "::warning::normalizer missing, skip"
+          fi
+
       - name: Locate bootstrap
         working-directory: .
         run: |
