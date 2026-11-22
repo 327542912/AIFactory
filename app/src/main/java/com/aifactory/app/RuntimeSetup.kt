@@ -16,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /** 设置页里的 Runtime / SDK 安装卡片（取代原来的 Termux 连接说明）。 */
 @Composable
@@ -28,6 +29,7 @@ fun RuntimeSetupCard() {
     var bootSha by remember { mutableStateOf(cfg.bootstrapSha) }
     var sdkUrl by remember { mutableStateOf(cfg.sdkUrl) }
     var repoUrl by remember { mutableStateOf(cfg.repoUrl) }
+    var mirror by remember { mutableStateOf(cfg.mirrorPrefix) }
     var progress by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -60,6 +62,27 @@ fun RuntimeSetupCard() {
         }
     }
 
+    val debPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
+        if (!uris.isNullOrEmpty()) launchTask {
+            val inbox = File(RuntimePaths.home(ctx), ".aifactory/inbox").apply { mkdirs() }
+            val saved = ArrayList<File>()
+            withContext(Dispatchers.IO) {
+                uris.forEachIndexed { i, u ->
+                    val f = File(inbox, "local-$i.deb")
+                    ctx.contentResolver.openInputStream(u)!!.use { ins -> f.outputStream().use { ins.copyTo(it) } }
+                    saved += f
+                }
+            }
+            progress = "已拷入 ${saved.size} 个 deb（${saved.sumOf { it.length() } / 1048576} MB），开始安装…"
+            val cmd = "cd " + shQuote(inbox.path) + " && apt install -y " +
+                saved.joinToString(" ") { "./" + it.name } + " 2>&1"
+            val r = rt.run(cmd, RuntimePaths.home(ctx), 3600)
+            progress = (if (r.ok) "本地包安装完成。" else "本地包安装失败（退出码 ${r.exitCode}）：") +
+                "\n" + tailText(r.output, 1500)
+            saved.forEach { it.delete() }
+        }
+    }
+
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Runtime（独立于 Termux）", fontWeight = FontWeight.SemiBold)
@@ -71,6 +94,14 @@ fun RuntimeSetupCard() {
             } else if (progress.isNotBlank()) Text(progress, fontSize = 12.sp, lineHeight = 17.sp)
 
             HorizontalDivider()
+            OutlinedTextField(mirror, { mirror = it; cfg.mirrorPrefix = it },
+                label = { Text("下载加速前缀（可选，作用于下面两个下载）") },
+                placeholder = { Text("https://ghproxy.net") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Text("填 https://ghproxy.net 就变成 https://ghproxy.net/https://github.com/…；只加一层代理，sha256 仍按原文件校验。软件源也可以这么写。",
+                fontSize = 11.sp, lineHeight = 15.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .55f))
+
+            HorizontalDivider()
             Text("1. 安装 Runtime（bootstrap-aarch64.zip）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
             OutlinedTextField(bootUrl, { bootUrl = it; cfg.bootstrapUrl = it }, label = { Text("下载地址（GitHub Release）") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -78,7 +109,7 @@ fun RuntimeSetupCard() {
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy && bootUrl.isNotBlank(), onClick = {
-                    launchTask { ArchiveInstaller.installBootstrapFromUrl(ctx, bootUrl.trim(), bootSha, { progress = it }) }
+                    launchTask { ArchiveInstaller.installBootstrapFromUrl(ctx, bootUrl.trim(), bootSha, mirror, { progress = it }) }
                 }) { Text("下载并安装") }
                 OutlinedButton(enabled = !busy, onClick = { bootPicker.launch(arrayOf("*/*")) }) { Text("选择本地 zip") }
             }
@@ -103,10 +134,18 @@ fun RuntimeSetupCard() {
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy && sdkUrl.isNotBlank(), onClick = {
-                    launchTask { ArchiveInstaller.installSdkFromUrl(ctx, sdkUrl.trim(), { progress = it }) }
+                    launchTask { ArchiveInstaller.installSdkFromUrl(ctx, sdkUrl.trim(), mirror, { progress = it }) }
                 }) { Text("下载并安装") }
                 OutlinedButton(enabled = !busy, onClick = { sdkPicker.launch(arrayOf("*/*")) }) { Text("选择本地 zip") }
             }
+            HorizontalDivider()
+            Text("4. 本地安装包（.deb）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("网速拉不动 105 MB 的 JDK 时：用浏览器/电脑把 deb 下到手机，选进来由 apt 装，依赖仍从上面那个软件源补。可多选。",
+                fontSize = 11.sp, lineHeight = 15.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
+            OutlinedButton(enabled = !busy && rt.isInstalled(), onClick = {
+                debPicker.launch(arrayOf("application/vnd.debian.binary-package", "application/octet-stream", "*/*"))
+            }) { Text("选择本地 .deb") }
+
             Text(
                 "Runtime 与 SDK 都由本仓库的 GitHub Actions 构建（包名 com.aifactory.app）。SDK 内含 platforms/android-34/35/36 与 build-tools/34.0.0/35.0.0/36.0.0，" +
                     "其中 aapt2 / zipalign / aapt / aidl 是编译好的 aarch64 静态二进制（官方包是 x86_64，手机上跑不起来）。地址已默认填好，直接点「下载并安装」。\n\n" +

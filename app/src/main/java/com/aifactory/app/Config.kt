@@ -77,6 +77,11 @@ class AppConfig(context: Context) {
         get() = get("extra_repo_url", "https://github.com/327542912/AIFactory/releases/download/runtime-extra/")
         set(v) = put("extra_repo_url", v)
 
+    /** 下载加速前缀（可选）。例如 https://ghproxy.net → 实际请求 https://ghproxy.net/https://github.com/... */
+    var mirrorPrefix: String
+        get() = get("mirror_prefix", "")
+        set(v) = put("mirror_prefix", v)
+
     /** 发布签名密钥口令：首次使用时随机生成，只保存在应用私有存储。 */
     val keystorePassword: String
         get() {

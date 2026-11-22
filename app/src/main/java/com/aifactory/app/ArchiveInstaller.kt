@@ -29,11 +29,11 @@ object ArchiveInstaller {
         withContext(Dispatchers.IO) { installBootstrapStream(ctx, open(), progress) }
 
     suspend fun installBootstrapFromUrl(
-        ctx: Context, url: String, sha256: String, progress: (String) -> Unit
+        ctx: Context, url: String, sha256: String, mirror: String = "", progress: (String) -> Unit
     ) = withContext(Dispatchers.IO) {
         val tmp = File(ctx.cacheDir, "bootstrap-download.zip")
         try {
-            val actual = download(url, tmp, progress)
+            val actual = download(url, tmp, progress, mirror)
             if (sha256.isNotBlank() && !actual.equals(sha256.trim(), ignoreCase = true)) {
                 tmp.delete()   // 哈希不对说明这份残包没救，删掉重来
                 throw IOException("SHA-256 不匹配：期望 ${sha256.trim()}，实际 $actual")
@@ -51,11 +51,11 @@ object ArchiveInstaller {
     suspend fun installSdk(ctx: Context, open: () -> InputStream, progress: (String) -> Unit) =
         withContext(Dispatchers.IO) { installSdkStream(ctx, open(), progress) }
 
-    suspend fun installSdkFromUrl(ctx: Context, url: String, progress: (String) -> Unit) =
+    suspend fun installSdkFromUrl(ctx: Context, url: String, mirror: String = "", progress: (String) -> Unit) =
         withContext(Dispatchers.IO) {
             val tmp = File(ctx.cacheDir, "sdk-download.zip")
             try {
-                val actual = download(url, tmp, progress)
+                val actual = download(url, tmp, progress, mirror)
                 progress("下载完成，SHA-256：$actual")
                 installSdkStream(ctx, FileInputStream(tmp), progress)
                 tmp.delete()
@@ -185,7 +185,14 @@ object ArchiveInstaller {
      *   2. 带 User-Agent / Accept，部分 CDN 缺 UA 会直接断；
      *   3. 失败按 HTTP Range 断点续传，最多 5 次，成功后再算整份 sha256。
      */
-    private fun download(url: String, dest: File, progress: (String) -> Unit): String {
+    /** 拼接加速前缀：镜像只包一层 URL，不改文件内容，sha256 仍按原文件校验。 */
+    private fun applyMirror(url: String, mirror: String): String {
+        val m = mirror.trim()
+        if (m.isEmpty() || !url.startsWith("http")) return url
+        return m.trimEnd('/') + "/" + url
+    }
+
+    private fun download(url: String, dest: File, progress: (String) -> Unit, mirror: String = ""): String {
         dest.parentFile?.mkdirs()
         var attempt = 0
         var last: Exception? = null
@@ -194,7 +201,7 @@ object ArchiveInstaller {
             var conn: HttpURLConnection? = null
             try {
                 val have = if (dest.exists()) dest.length() else 0L
-                conn = connect(url, have)
+                conn = connect(applyMirror(url, mirror), have)
                 val code = conn.responseCode
                 if (code == 416) {
                     dest.delete()
