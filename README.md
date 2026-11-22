@@ -229,6 +229,9 @@ app/src/main/java/com/aifactory/app/
 | [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 143,210,636 B，sha256 `70d10e0a…6faa3`（3 个 platform + 3 个 build-tools + arm64 adb） |
 | [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.5-debug.apk` + `.sha256` | 覆盖升级用固定签名 |
 
+> **手工改 `runtime-repo` 的注意事项**：增删 deb 后 `Packages` / `Packages.gz` / `Release` 必须一起重建 —— 只换索引不换 `Release`，apt 会直接拒收并报
+> `File has unexpected size (40057 != 40531). Mirror sync in progress?`。仓库里 `scripts/regen-repo-index.sh` 就是干这个的。
+
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
 
 ---
