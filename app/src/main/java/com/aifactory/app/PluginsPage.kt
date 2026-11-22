@@ -43,11 +43,11 @@ fun PluginsPage() {
             PluginSpec(
                 "Gradle / Android Build",
                 listOf("openjdk-21", "gradle", "apksigner", "zip", "unzip"),
-                "openjdk-21 + Gradle 8.7 + apksigner；Gradle 走补充源。编 APK 还差 arm64 版 aapt2 和 Android SDK。",
+                "JDK 21.0.8 + Gradle 8.7 + apksigner + zip/unzip。aapt2/d8 由 Android SDK 提供，SDK 装好后即为 ✓。",
                 { p -> File(p, "bin/java").exists() && File(p, "opt/gradle-8.7/bin/gradle").exists() }
             ),
             PluginSpec(
-                "CMake / Native Build",
+                "Make / 构建工具",
                 listOf("make"),
                 "原生构建用；编 Android native 还需要 NDK 与 sysroot。",
                 { p -> File(p, "bin/cmake").exists() }

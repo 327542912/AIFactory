@@ -112,6 +112,11 @@ object LocalRepo {
         val pt = File(d, "Packages.tmp")
         pt.writeText(sb.toString())
         pt.renameTo(File(d, "Packages"))
+        val pkgFile = File(d, "Packages")
+        // 没有哈希清单时 apt 会先按 by-hash 路径取一次索引、失败后再回退，
+        // 日志里就是那条 "Method gave a blank filename"。补上 MD5Sum / SHA256 即可根治。
+        val md5 = digest("MD5", pkgFile)
+        val sha = digest("SHA-256", pkgFile)
         val release = buildString {
             append("Origin: AIFactory\n")
             append("Label: AIFactory Local\n")
@@ -124,11 +129,26 @@ object LocalRepo {
             val fmt = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
             fmt.timeZone = TimeZone.getTimeZone("GMT")
             append("Date: " + fmt.format(Date()) + "\n")
+            append("MD5Sum:\n " + md5 + " " + pkgFile.length() + " ./Packages\n")
+            append("SHA256:\n " + sha + " " + pkgFile.length() + " ./Packages\n")
         }
         val rt2 = File(d, "Release.tmp")
         rt2.writeText(release)
         rt2.renameTo(File(d, "Release"))
         return true to names.joinToString(" ")
+    }
+
+    private fun digest(algo: String, f: File): String {
+        val md = MessageDigest.getInstance(algo)
+        f.inputStream().use { ins ->
+            val buf = ByteArray(1 shl 16)
+            while (true) {
+                val n = ins.read(buf)
+                if (n <= 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { String.format("%02x", it) }
     }
 
     /** 幂等：把 file:// 本地源写进 sources.list（没有就追加）。 */
