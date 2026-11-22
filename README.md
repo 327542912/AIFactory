@@ -1,52 +1,222 @@
-# AIFactory 0.1.0
+# AIFactory
 
-A new, independent Android AI development workspace. It does not modify the existing EdgeCluster project.
+**Android 上的自建 AI 开发工作台。不依赖 Termux，不用 proot，不复制 rootfs —— 整套 Linux 运行环境是从源码编译出来的，只把前缀里的包名换成了自己的。**
 
-## Included in this scaffold
-- Kotlin + Jetpack Compose hybrid workspace UI
-- Light/dark theme toggle
-- Chat UI with configurable OpenAI-compatible `/chat/completions` endpoint
-- Project, Terminal, Plugins and Settings pages
-- Initial Termux RUN_COMMAND dispatch bridge
+[![Runtime CI](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml/badge.svg?branch=master)](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml)
+[![APK CI](https://github.com/327542912/AIFactory/actions/workflows/android-build.yml/badge.svg?branch=app-0.2.2)](https://github.com/327542912/AIFactory/actions/workflows/android-build.yml)
+![arch](https://img.shields.io/badge/arch-arm64--v8a-blue)
+![android](https://img.shields.io/badge/Android-8.0%2B-green)
+![runtime](https://img.shields.io/badge/runtime-Termux%20fork%20(no%20proot)-orange)
 
-## Build in Termux
+<p align="center">
+  <img src="docs/images/settings.png" width="360" alt="AIFactory 设置页">
+</div>
 
-Extract the project to `~/AIFactory`, then run:
+---
 
-```bash
-cd ~/AIFactory
-gradle assembleDebug --no-daemon
+## 这是什么
+
+一台没 root 的 Android 手机上，要跑 `bash`、`java`、`gradle`、`git`、`apksigner`，最后在手机本地编出 APK —— 这条路通常要靠 Termux，或者靠 proot 套一个 rootfs。AIFactory 走的是第三条路：
+
+**以 `termux-packages` 为构建系统，从源码把整套运行环境重编一遍，把二进制里面写死的前缀从 `/data/data/com.termux/files/usr` 换成 `/data/data/com.aifactory.app/files/usr`，作为本 App 的私有数据直接 `execve`。**
+
+| 项 | 值 |
+|---|---|
+| 应用包名 / applicationId | `com.aifactory.app` |
+| 当前版本 | `0.2.2`（versionCode 5） |
+| `targetSdk` | **28**（硬性上限，见下） |
+| `minSdk` / `compileSdk` | 26 / 34 |
+| Runtime 前缀 | `/data/data/com.aifactory.app/files/usr` |
+| 架构 | `aarch64`（arm64-v8a） |
+| 是否需要 root / proot / Termux | 都不需要 |
+
+### 为什么 `targetSdk` 必须是 28
+
+Android 10（API 29）起，应用私有目录下的可执行文件被禁止直接 `execve`。`targetSdk 28` 才能让这个 App 执行自己 `files/usr/bin` 下的 ELF —— 这不是偷懒，是这套方案成立的**前提**。改回 34 会直接让整个 Runtime 无法启动。
+
+### 为什么不用 proot
+
+proot 靠 `ptrace` 拦截每个系统调用做路径重写，代价是：每次文件操作都多一次陷阱、线程数受限于调试器、`fork` 密集的构建（Gradle / CMake）慢一个数量级，而且 `ptrace` 在某些 ROM 的 seccomp 策略下直接被拒。改前缀重编虽然只做一次、要几十分钟，但**运行时是零开销的原生执行**。
+
+---
+
+## 快速开始（手机端）
+
+### 1. 安装 App
+
+从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 下载 `AIFactory-0.2.2-debug.apk`（debug 签名，仅供自用）。
+
+```text
+https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-0.2.2-debug.apk
 ```
 
-APK output: `app/build/outputs/apk/debug/app-debug.apk`
+### 2. 安装 Runtime
 
-Install it with:
+打开 App → **设置** → 第 1 张卡「安装 Runtime」，地址默认已填好，直接点「下载并安装」（约 29.6 MB，解压后 3200+ 文件、1100+ 软链）。
 
-```bash
-termux-open app/build/outputs/apk/debug/app-debug.apk
+### 3. 接入自建 apt 源
+
+同一个页面第 2 张卡点「写入软件源并更新」。它做两件事：把 `etc/apt/sources.list` 里的 **官方 Termux 源整行注释**（官方包的路径前缀是 `com.termux`，装进来自建 Runtime 会静默坏掉），换成本仓库发布的自建平铺源：
+
+```text
+deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runtime-repo/ ./
 ```
 
-## Termux setup
+`Ign ... InRelease` 是平铺源 + `[trusted=yes]` 的正常现象，不是错误。
 
-In Termux:
+### 4. 装工具链
+
+终端里：
 
 ```bash
-mkdir -p ~/.termux
-printf '\nallow-external-apps = true\n' >> ~/.termux/termux.properties
+pkg install openjdk-21 gradle git apksigner zip unzip
 ```
 
-Restart Termux. Grant AIFactory the Termux RUN_COMMAND permission when Android presents it. Only authorize apps you trust.
+装完回设置页，`java` / `gradle` / `git` / `apksigner` 四个 ✗ 会变成 ✓（判据是 `files/usr/bin` 下文件是否真实存在，不缓存状态）。
 
-Official interface reference: https://github.com/termux/termux-app/wiki/RUN_COMMAND-Intent
+### 5. 装 Android SDK
 
-## Current limitations
-- The bridge dispatches commands but does not yet stream stdout/stderr back into the app.
-- API credentials are held in memory only and are not persisted. Do not use this scaffold on a shared device with sensitive credentials.
-- This version is a functional UI/model-chat/command-dispatch scaffold, not yet a complete autonomous coding agent. Task DAG, constrained file tools, output streaming, build/test/repair loop, Git rollback, encrypted credential storage, plugin isolation, and self-update workflow remain to be implemented.
-- Self-updating the host APK must use Android's package installer and user confirmation; silent self-replacement is not supported.
+第 3 张卡导入 SDK zip（需含 `platforms/android-34` 与 `build-tools/`）。**注意**：官方 `build-tools` 里的 `aapt2` 是 x86_64 ELF，在 arm64 手机上跑不了，必须换 aarch64 静态版（见[已知限制](#已知限制)）。
 
-## Build versions
-- compileSdk 34 / targetSdk 34 / minSdk 26
-- Android Gradle Plugin 8.6.1
-- Kotlin 2.0.21
-- Intended for Gradle 8.7 and JDK 21
+### 6. 在手机上编 APK
+
+```bash
+cd ~/projects/<项目>
+bash build_termux.sh
+# 产物：app/build/outputs/apk/debug/app-debug.apk
+```
+
+`build_termux.sh` 的 shebang 是 `#!/data/data/com.termux/files/usr/bin/bash`（历史遗留），**在 Runtime 里必须用 `bash build_termux.sh` 调用**，直接 `./build_termux.sh` 会 `bad interpreter`。
+
+---
+
+## 构建与复现（GitHub Actions）
+
+两套独立的流水线，都在 `.github/` 下，且**都只保留 `workflow_dispatch`**——早前挂着 `push` 触发器，每改一行代码都会误触发一轮 36 分钟的重编。
+
+### A. Runtime（[`build-aifactory-runtime.yml`](.github/workflows/build-aifactory-runtime.yml)，分支 `master`）
+
+```bash
+gh workflow run build-aifactory-runtime.yml -f skip_bootstrap=false
+```
+
+| 输入 | 默认 | 含义 |
+|---|---|---|
+| `skip_bootstrap` | `false` | `true` = 跳过 bootstrap 重编，只编 apt 包（省 36–47 分钟） |
+| `extra_packages` | 空 | 要**塞进 bootstrap zip** 的额外包；填 `none` 表示不打包 |
+| `repo_packages` | 空 | 只发布到 **apt 源**的包，如 `openjdk-21,gradle`；填 `none` 表示不打包 |
+
+常用组合：
+
+| 目的 | 参数 |
+|---|---|
+| 全量重出 bootstrap | `skip_bootstrap=false`，其余留空 |
+| 只补 apt 包（日常） | `skip_bootstrap=true`、`extra_packages=none`、`repo_packages=openjdk-21,gradle` |
+
+流水线步骤（按执行顺序）：
+
+1. `Checkout AIFactory` / `Checkout Termux build system` —— 后者是 fork `agnostic-apollo/termux-packages` 的 `infra-improvs` 分支
+2. `Configure AIFactory package identity` —— 把包名/前缀写进构建系统
+3. 五个确定性补丁：`swig` raw-insert 修 unbound、`docbook-xml` 换 oasis 镜像、`dos2unix`/`nano` 换活源、剔除 `command-not-found`、给全局 CMake 传 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`
+4. `Preflight verify source hashes` —— 门禁：下载所有源包并逐字节比对 SHA256，404/410 硬失败、5xx 仅警告
+5. `Build matching Android NDK Docker image`（约 5 分钟）
+6. `Build ARM64 bootstrap`（**冷启动 36–47 分钟**）
+7. `Normalize bootstrap prefix leftovers` —— 把 18 个 shell 脚本正文里残留的 `com.termux` 改掉（二进制跳过），并断言旧前缀 0 处
+8. `Locate / Verify / Upload / Publish release` —— 发布到 `runtime-latest`
+9. `Build extra packages` → `Publish apt repo` —— 发到 `runtime-repo`
+
+**两个反直觉的细节**
+
+- `build-bootstraps.sh` 里 `TERMUX_BOOTSTRAP_OUTPUT_DIRECTORY` 指向**仓库根目录**，不是 `output/`，zip 落在 `termux-packages/bootstrap-aarch64.zip`，所以定位用的是 `find . -maxdepth 3 -name 'bootstrap-aarch64.zip'`。
+- `run-docker.sh` 是 `set -e` 的 `sh`，末尾的 trap 会把"构建成功"的退出码翻成 1 —— 日志明明打印了 `[*] Finished successfully`，步骤却红。workflow 里用 `set +e` 捕获 rc，**只以 zip 是否落盘为判据**，Upload/Publish 一律 `if: always()`。
+
+**为什么没有缓存**：`run-docker.sh` 只挂载仓库目录，`~/.termux-build` 在容器内，runner 结束即销毁 —— 每轮都是从零冷编，这也是 36 分钟起步的原因。
+
+### B. APK（[`android-build.yml`](.github/workflows/android-build.yml)，分支 `app-0.2.2`）
+
+JDK 21 (temurin) + `setup-android` + `sdkmanager platforms;android-34 build-tools;34.0.0` + Gradle 8.7 → `gradle assembleDebug` → artifact `aifactory-debug-apk`。约 6–8 分钟。
+
+> 仓库里**没有 gradle wrapper 目录**，CI 直接调 `gradle`，不要指望 `./gradlew`。
+
+---
+
+## 仓库结构
+
+| 分支 | 内容 | 用途 |
+|---|---|---|
+| `main`（默认分支） | 只有 README + 文档 | 仓库门面；`workflow_dispatch` 要求 workflow 文件在默认分支 |
+| `master` | runtime 构建流水线 + 补丁脚本 | 真正的 CI |
+| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK |
+| `aifactory-*` | 历史快照 | 存档，App 仍为 0.1.0 / targetSdk 34，**不要直接用** |
+
+Key 文件：
+
+```text
+.github/workflows/build-aifactory-runtime.yml   runtime 全流程（21 步）
+.github/workflows/android-build.yml             APK 构建
+.github/workflows/fixup-runtime-prefix.yml      已发布 zip 的一次性前缀修复
+.github/scripts/normalize-bootstrap-prefix.sh   bootstrap 前缀归一化（构建内也会调用）
+app/src/main/java/com/aifactory/app/
+    Config.kt             RuntimePaths：硬编码 files/usr、默认三个下载地址
+    RuntimeEngine.kt      exec 封装、环境变量、statusReport()（✓/✗ 的唯一判据）
+    ArchiveInstaller.kt   解压 / 建软链 / chmod（不做路径重写）
+    PluginsPage.kt        插件中心：apt 包 + 文件探针 + 实时安装输出
+```
+
+---
+
+## 发布资产
+
+| tag | 资产 | 说明 |
+|---|---|---|
+| [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,610,948 B，sha256 `1738bf87…0d750d` |
+| [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | ~200 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源 |
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.2-debug.apk` + `.sha256` | 16,491,168 B |
+
+资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
+
+---
+
+## 已知限制
+
+| 问题 | 现状 / 原因 | 出路 |
+|---|---|---|
+| `aapt2` 是 ✗ | 官方 `build-tools` 里的 `aapt2` 为 x86_64 ELF，arm64 上无法执行 | 换 aarch64 静态版（`lzhiyong/android-sdk-tools` 35.0.2），并配 `android.aapt2FromMavenOverride` |
+| Android SDK 从未打包 | App 只支持导入 zip，没有内置下载源 | 需要自建 `sdk-aarch64.zip` 并发布 |
+| `termux-setup-storage` 失效 | `bin/am` 调的是 `com.termux.termuxam.Am` 类名，包名不同 | 自造 `am` 桥接，或改用 `curl` 直接拉文件 |
+| 官方源不可用 | 官方包前缀是 `com.termux`，装进来路径全错 | 必须用自建 `runtime-repo` |
+| 每轮冷编 36+ 分钟 | `~/.termux-build` 不在挂载目录内 | 把缓存目录也挂出来 / 用自托管 runner |
+| 编 JDK 会撞 CMake 4 | 老配方写 `cmake_minimum_required(VERSION 2.8)`，CMake ≥ 4 直接报错 | 已在 workflow 里给全局 CMake 传 `CMAKE_POLICY_VERSION_MINIMUM=3.5` |
+| `command-not-found` 已被剔除 | 它的 `generate-db.js` 拿官方镜像的 `Contents-<arch>.gz` 匹配 `bin/`，前缀不同必然失配并 `exit 1` | 需要的话自己生成索引 |
+| 仓库无 LICENSE 文件 | Runtime 派生自 GPL-3.0 的 `termux-packages` | 分发二进制前先定许可，别直接商用 |
+
+---
+
+## 排错
+
+| 症状 | 原因 | 处理 |
+|---|---|---|
+| 日志 `Finished successfully` 但步骤红 | `run-docker.sh` 的 trap 覆盖退出码 | 只看 zip 是否落盘，rc 忽略 |
+| `CMake Error ... Compatibility with CMake < 3.5` | CMake 4 拒收老 `cmake_minimum_required` | 传 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` |
+| `bad interpreter` | 脚本 shebang 仍是 `com.termux` 前缀 | 用 `bash script.sh` 调，或跑 `normalize-bootstrap-prefix.sh` |
+| `pkg` 一执行就报找不到 `termux-setup-package-manager` | 脚本正文里残留旧前缀 | 同上，归一化后旧前缀必须 0 处 |
+| `apt update` 报 `Ign ... InRelease` | 平铺源没有 `InRelease`，属正常 | 忽略；`Release` / `Packages` 拉到即成功 |
+| 装完 `java` 仍 ✗ | JDK 在 `opt/openjdk/bin/java`，或安装中途失败 | 看设置页 `Runtime 安装完成` 之后手动 `ls files/usr/bin/java files/usr/opt` |
+| 构建中断后再跑还是 36 分钟 | 无缓存 | 见「已知限制」 |
+
+---
+
+## 状态
+
+- [x] 源码重编的 ARM64 bootstrap（自建前缀，已发布）
+- [x] 自建 apt 源（`pkg install` 可用）
+- [x] App 0.2.2：`targetSdk 28`、版本号读 `BuildConfig`、插件页数据驱动
+- [ ] JDK / Gradle / apksigner 打进 apt 源（构建中）
+- [ ] arm64 版 Android SDK 打包
+- [ ] 设备端 `bash build_termux.sh` 出 APK 全链路跑通
+
+---
+
+## 致谢
+
+构建系统来自 [termux-packages](https://github.com/termux/termux-packages) 及其 fork [agnostic-apollo/termux-packages](https://github.com/agnostic-apollo/termux-packages)。没有 Termux 团队十几年的配方积累，这套 prefix 重编方案不可能落地。
