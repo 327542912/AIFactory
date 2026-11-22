@@ -170,11 +170,18 @@ class RuntimeEngine(private val context: Context) {
     /**
      * 把 apt 软件源换成项目自建仓库。必须替换官方源：官方包的路径前缀是 com.termux，装进来会损坏 Runtime。
      */
-    fun configureAptRepo(url: String): String {
+    fun configureAptRepo(url: String, extraUrl: String = ""): String {
         val u = url.trim().let { if (it.endsWith("/")) it else "$it/" }
+        val e = extraUrl.trim().let { if (it.endsWith("/")) it else "$it/" }
         val apt = File(prefix, "etc/apt")
         apt.mkdirs()
-        File(apt, "sources.list").writeText("deb [trusted=yes] $u ./\n")
+        val body = buildString {
+            // 官方 Termux 源的包把前缀写死成 com.termux，装进来会把本 Runtime 的二进制带坏；一律不启用
+            append("# 官方 termux 源已停用：前缀 com.termux，会污染本 runtime\n")
+            append("deb [trusted=yes] ").append(u).append(" ./\n")
+            if (e.isNotBlank()) append("deb [trusted=yes] ").append(e).append(" ./\n")
+        }
+        File(apt, "sources.list").writeText(body)
         File(apt, "sources.list.d").listFiles()?.forEach { it.delete() }
         return u
     }

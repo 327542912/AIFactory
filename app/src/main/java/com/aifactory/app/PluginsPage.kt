@@ -85,8 +85,9 @@ fun PluginsPage() {
         running = spec.title
         log = "准备安装 ${spec.packages.joinToString(" ")} …"
         scope.launch {
-            val hasPkg = File(prefix, "bin/pkg").exists()
-            val pm = if (hasPkg) "pkg" else "apt"
+            // 不能用 pkg：termux-tools 的 pkg 会探测镜像，发现本仓库没有 InRelease 就判定 "bad"，
+            // 然后把 sources.list 改写成官方 termux 源（前缀 com.termux），把 runtime 带坏。
+            val pm = "apt-get"
             var pre = ""
             // Gradle 装在补充源里（apt 主源那份是 1.9.0.0，跑不动 AGP 8 工程）
             if (spec.packages.any { it.startsWith("gradle") }) {

@@ -115,14 +115,14 @@ fun RuntimeSetupCard() {
             }
 
             HorizontalDivider()
-            Text("2. 软件源（pkg install 使用）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("2. 软件源（apt-get install 使用）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
             OutlinedTextField(repoUrl, { repoUrl = it; cfg.repoUrl = it }, label = { Text("apt 软件源地址") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(enabled = !busy && rt.isInstalled() && repoUrl.isNotBlank(), onClick = {
                 launchTask {
-                    val u = rt.configureAptRepo(repoUrl)
+                    val u = rt.configureAptRepo(repoUrl, cfg.extraRepoUrl)
                     progress = "已写入软件源 $u，正在 apt update…"
-                    val r = rt.run("apt update 2>&1", RuntimePaths.home(ctx), 300)
+                    val r = rt.run("apt-get update 2>&1", RuntimePaths.home(ctx), 300)
                     progress = (if (r.ok) "软件源可用。" else "apt update 失败（退出码 ${r.exitCode}）：") +
                         "\n" + tailText(r.output, 900)
                 }

@@ -35,8 +35,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-private val Muted = Color(0xFF85827C)
-private val Accent = Color(0xFFB66B45)
+internal val Muted = Color(0xFF85827C)
+internal val Accent = Color(0xFFB66B45)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -141,7 +141,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
                             persistFileRecords(context, importedFiles)
                         }
                     )
-                    Page.TERMINAL -> TerminalPage(runCommand)
+                    Page.TERMINAL -> TerminalPage()
                     Page.PLUGINS -> PluginsPage()
                     Page.SETTINGS -> SettingsPage()
                 }
@@ -303,128 +303,6 @@ private fun requestChat(base: String, model: String, key: String, history: List<
         if (code !in 200..299) "模型 API 错误（HTTP $code）：$response"
         else JSONObject(response).getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content", "模型没有返回文本。")
     } catch (e: Exception) { "请求失败：${e.message}" } finally { connection?.disconnect() }
-}
-
-@Composable
-private fun TerminalPage(runCommand: suspend (String) -> String) {
-    var command by remember { mutableStateOf("pwd && ls -la") }
-    var result by remember {
-        mutableStateOf(
-            "AIFactory 独立 Shell 已接入。\n" +
-            "工作目录：AIFactory 私有 workspace"
-        )
-    }
-    var running by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-
-    Column(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            "AIFactory Runtime",
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold
-        )
-
-        Text(
-            "独立本地 Shell · 不依赖 Termux App",
-            color = Muted,
-            fontSize = 12.sp
-        )
-
-        OutlinedTextField(
-            command,
-            { command = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Shell 命令") },
-            minLines = 2,
-            enabled = !running
-        )
-
-        Button(
-            enabled = command.isNotBlank() && !running,
-            onClick = {
-                scope.launch {
-                    running = true
-                    result = "正在执行……"
-                    try {
-                        result = runCommand(command)
-                    } catch (e: Exception) {
-                        result = "执行失败：${e.message}"
-                    } finally {
-                        running = false
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (running) {
-                CircularProgressIndicator(
-                    Modifier.size(18.dp),
-                    strokeWidth = 2.dp
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("执行中")
-            } else {
-                Icon(Icons.Default.PlayArrow, null)
-                Spacer(Modifier.width(6.dp))
-                Text("执行命令")
-            }
-        }
-
-        Surface(
-            Modifier.fillMaxWidth().weight(1f),
-            color = Color(0xFF171715),
-            shape = RoundedCornerShape(14.dp)
-        ) {
-            Column(Modifier.fillMaxSize()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(
-                        start = 14.dp, end = 8.dp, top = 6.dp, bottom = 6.dp
-                    ),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "终端输出",
-                        color = Color(0xFFE4E1DA),
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(
-                        onClick = {
-                            clipboard.setText(
-                                androidx.compose.ui.text.AnnotatedString(result)
-                            )
-                        },
-                        enabled = result.isNotEmpty()
-                    ) {
-                        Text("复制全部")
-                    }
-                }
-
-                Divider(color = Color(0xFF393936))
-
-                androidx.compose.foundation.text.selection.SelectionContainer {
-                    LazyColumn(
-                        Modifier.fillMaxSize()
-                    ) {
-                        item {
-                            Text(
-                                result,
-                                Modifier.fillMaxWidth().padding(14.dp),
-                                color = Color(0xFFE4E1DA),
-                                fontSize = 12.sp,
-                                lineHeight = 18.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable
