@@ -156,6 +156,7 @@ internal object Pipeline {
 
     /** 给 Agent 用的现场快照：当前在跑什么、上个任务成功与否、最近日志、最近产物。 */
     fun snapshot(ctx: Context): String = buildString {
+        appendLine("已完成阶段：" + stagesDone.joinToString(" → "))
         appendLine("排队中：" + queued + "  运行中：" + (if (busy) (current.ifBlank { "是" }) else "否") +
             (if (stage.isNotBlank()) " / 阶段：" + stage else ""))
         appendLine("最近产物：" + (lastApk?.path ?: "无") + (lastPkg?.let { "  包名：" + it } ?: ""))

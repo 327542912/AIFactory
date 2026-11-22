@@ -59,6 +59,8 @@ class AgentEngine(private val ctx: Context) {
             emptyMap(), emptyList()),
         ToolDef("read_log", "读取日志文件（默认最近一次任务日志），可指定行数。",
             mapOf("path" to "日志路径，留空=最近一次", "lines" to "读取最后多少行，默认 200"), emptyList()),
+        ToolDef("fetch_url", "抓取一个 http(s) 网址的文本内容（内置网络栈，不依赖 curl）。用于查文档、看仓库文件、下载文本。",
+            mapOf("url" to "要抓取的网址", "max_chars" to "最多返回多少字符，默认 6000"), listOf("url")),
         ToolDef("remember", "把一条经验写进长期记忆（跨会话保留），用于自我改进：踩过的坑、验证有效的参数、环境限制。",
             mapOf("note" to "要记住的一句话"), listOf("note"))
     )
@@ -313,6 +315,19 @@ class AgentEngine(private val ctx: Context) {
                 val f = if (p.isBlank()) Pipeline.lastLog else File(p)
                 if (f == null || !f.exists()) "没有日志文件：${p.ifBlank { "（没有任何任务日志）" }}"
                 else f.readLines().takeLast(lines.coerceIn(1, 5000)).joinToString("\n")
+            }
+            "fetch_url" -> {
+                val u = a.getString("url")
+                val cap = a.optString("max_chars").toIntOrNull() ?: 6000
+                runCatching {
+                    val c = (URL(u).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 15000; readTimeout = 20000; instanceFollowRedirects = true
+                        setRequestProperty("User-Agent", "AIFactory/1.0")
+                    }
+                    val code = c.responseCode
+                    val body = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+                    "HTTP " + code + " (" + body.length + " chars)\n" + body.take(cap)
+                }.getOrElse { "抓取失败：" + (it.message ?: it.javaClass.simpleName) }
             }
             "remember" -> {
                 val note = a.getString("note")
