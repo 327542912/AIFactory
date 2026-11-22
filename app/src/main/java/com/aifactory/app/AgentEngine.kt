@@ -28,7 +28,8 @@ class AgentEngine(private val ctx: Context) {
     private var nativeTools = true
 
     companion object {
-        private val FENCE = Regex("```tool\\s*(\\{.*?\\})\\s*```", RegexOption.DOT_MATCHES_ALL)
+        // 小模型经常写成 ```json / ```kotlin / 裸围栏，或把参数写成 args/parameters：全都容忍
+        private val FENCE = Regex("```(?:tool|tool_call|json)?\\s*([\\{\\[].*?[\\}\\]])\\s*```", RegexOption.DOT_MATCHES_ALL)
         private val DANGEROUS = Regex("rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*\\s+(/|~|\\\$HOME|\\\$PREFIX|/data)\\s*(\$|;|&)")
     }
 
@@ -132,6 +133,7 @@ class AgentEngine(private val ctx: Context) {
         var steps = 0; var toolCalls = 0; var requests = 0
         var buildOk: Boolean? = null   // 交付闸门：最近一次构建是否通过
         var forced = 0
+        var zeroToolRounds = 0
         var lastSig = ""
         var repeats = 0
         // 连续出现完全相同的调用和结果 = 卡住了：4 次提醒换思路，8 次暂停
@@ -191,16 +193,24 @@ class AgentEngine(private val ctx: Context) {
                     continue
                 }
 
-                // 模型想直接结束、但一次工具都没调用，且本轮没有任何构建记录：提示它先动手
-                if (buildOk == null && toolCalls == 0 && step == 1 && content.length > 60) {
+                // 模型想收工但至今一次工具都没调用：不管第几轮都打回，最多打回 2 次
+                if (toolCalls == 0 && zeroToolRounds < 2 && content.length > 40) {
+                    zeroToolRounds++
                     history.put(JSONObject().put("role", "assistant").put("content", content))
                     history.put(JSONObject().put("role", "user").put("content",
                         "【执行闸门】你还没有做任何实际动作。不要只给方案：先用 toolchain_status/pipeline_status 看清现场，" +
                         "然后直接开始动手（写代码/跑命令/构建），失败就修，直到产出可安装的 APK 或明确写出阻塞证据。"))
                     continue
                 }
+                if (toolCalls == 0 && content.length > 40) {
+                    return "模型这次只输出了文字、没有产生任何工具调用，所以文件、终端、构建都没有真正执行——" +
+                        "上面那些“已清理/已创建/已写文件”的说法是它编的，不是事实。\n" +
+                        "可执行工具：run_shell / write_file / read_file / build_apk / pipeline_status / read_log 等。\n" +
+                        "原因通常是当前模型不支持工具调用（qwen3.5-4B 这类小模型常见）：请在模型设置里换成支持 tools 的模型（如 qwen3-30B-A3B、glm-4、deepseek-chat），或把 Agent 开关关掉再纯聊天。"
+                }
 
-                val fenced = if (!nativeTools) FENCE.find(content) else null
+                // 原生工具没给调用、但正文里有围栏 JSON 时也执行（小模型混用两种格式很常见）
+                val fenced = FENCE.find(content)
                 if (fenced != null) {
                     history.put(JSONObject().put("role", "assistant").put("content", content))
                     val before = content.substring(0, fenced.range.first).trim()
