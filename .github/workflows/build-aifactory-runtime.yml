@@ -18,10 +18,6 @@ on:
         description: "额外构建并发布到 apt 软件源的包（逗号分隔，供 pkg install 使用；留空 = 跳过）"
         required: false
         default: "python,nodejs,curl,wget,jq,ripgrep,nano,make"
-  push:
-    branches: [master]
-    paths:
-      - ".github/workflows/build-aifactory-runtime.yml"
 
 jobs:
   build:
@@ -307,6 +303,8 @@ jobs:
           unzip -t "$ZIP" | tail -2
 
       - name: Normalize bootstrap prefix leftovers
+        env:
+          RUNTIME_REPO_URL: https://github.com/${{ github.repository }}/releases/download/runtime-repo/
         run: |
           if [ -f .github/scripts/normalize-bootstrap-prefix.sh ]; then
             ZIP=$(find termux-packages -maxdepth 2 -name 'bootstrap-aarch64.zip' -type f | head -1)
