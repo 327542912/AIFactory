@@ -1,7 +1,18 @@
-pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+        maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
+    }
+}
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories { google(); mavenCentral() }
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("https://maven.aliyun.com/repository/central") }
+    }
 }
 rootProject.name = "AIFactory"
 include(":app")
