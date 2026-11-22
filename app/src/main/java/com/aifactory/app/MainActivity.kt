@@ -50,7 +50,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class ChatMessage(val role: String, val text: String)
+internal data class ChatMessage(val role: String, val text: String)
 private enum class Page(val label: String) { CHAT("对话"), PROJECTS("项目"), FILES("文件"), TERMINAL("终端"), PLUGINS("插件"), SETTINGS("设置") }
 
 @Composable
@@ -158,20 +158,19 @@ private fun ChatPage(
     onPickFiles: () -> Unit,
     onRemoveAttachment: (FileRecord) -> Unit
 ) {
-    val messages = remember { mutableStateListOf(ChatMessage("assistant", "你好，我是 AIFactory。描述你想构建的软件，我们从需求分析和工程规划开始。")) }
-    var input by remember { mutableStateOf("") }
+    // 会话状态挂在 ChatRunner（进程级）：切页面、退到后台、甚至重启 App 都不丢
+    val messages = ChatRunner.messages
+    var input by remember { mutableStateOf(ChatRunner.draft) }
     val ctx = LocalContext.current
+    LaunchedEffect(Unit) { ChatRunner.load(ctx.applicationContext) }
     val cfg = remember { AppConfig(ctx.applicationContext) }
-    val agent = remember { AgentEngine(ctx.applicationContext) }
     var agentMode by remember { mutableStateOf(true) }
-    var job by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var baseUrl by remember { mutableStateOf(cfg.baseUrl) }
     var model by remember { mutableStateOf(cfg.model) }
     var apiKey by remember { mutableStateOf(cfg.apiKey) }
     var maxSteps by remember { mutableStateOf(cfg.maxSteps.toString()) }
     var showSettings by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    val busy = ChatRunner.busy
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -214,7 +213,7 @@ private fun ChatPage(
                     ) { Text(message.text, Modifier.padding(14.dp), fontSize = 14.sp, lineHeight = 21.sp) }
                 }
             }
-            if (busy) item { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)); Text(if (agentMode) "Agent 工作中…" else "正在请求模型…", color = Muted, fontSize = 12.sp); Spacer(Modifier.width(8.dp)); TextButton(onClick = { job?.cancel() }) { Text("停止") } } }
+            if (busy) item { Row(verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)); Text(if (agentMode) "Agent 工作中…" else "正在请求模型…", color = Muted, fontSize = 12.sp); Spacer(Modifier.width(8.dp)); TextButton(onClick = { ChatRunner.stop() }) { Text("停止") } } }
         }
         Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 3.dp) {
             Column(Modifier.padding(12.dp)) {
@@ -248,37 +247,16 @@ private fun ChatPage(
                     IconButton(onClick = onPickFiles) {
                         Icon(Icons.Default.Add, "添加附件", tint = Accent)
                     }
-                    OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("描述你想开发的软件…") }, shape = RoundedCornerShape(18.dp), maxLines = 5)
+                    OutlinedTextField(input, { input = it; ChatRunner.draft = it }, Modifier.weight(1f), placeholder = { Text("描述你想开发的软件…") }, shape = RoundedCornerShape(18.dp), maxLines = 5)
                     Spacer(Modifier.width(8.dp))
                     IconButton(enabled = input.isNotBlank() && !busy, onClick = {
                         val names = attachments.map { it.name }
                         val prompt = input.trim() +
                             if (names.isNotEmpty()) "\n\n附件文件：\n" + names.joinToString("\n") else ""
                         input = ""
-                        messages.add(ChatMessage("user", prompt))
+                        ChatRunner.draft = ""
                         attachments.toList().forEach { onRemoveAttachment(it) }
-                        if (apiKey.isBlank()) messages.add(ChatMessage("assistant", "请先打开模型设置，填写 API 地址、模型名称和 API Key。"))
-                        else {
-                            busy = true
-                            job = scope.launch {
-                                try {
-                                    if (agentMode) {
-                                        val answer = agent.run(prompt, cfg) { ev -> messages.add(ChatMessage("assistant", ev)) }
-                                        messages.add(ChatMessage("assistant", answer))
-                                    } else {
-                                        val answer = withContext(Dispatchers.IO) { requestChat(baseUrl, model, apiKey, messages.toList()) }
-                                        messages.add(ChatMessage("assistant", answer))
-                                    }
-                                } catch (e: kotlinx.coroutines.CancellationException) {
-                                    messages.add(ChatMessage("assistant", "已停止。"))
-                                    throw e
-                                } catch (e: Throwable) {
-                                    messages.add(ChatMessage("assistant", "出错：${e.message}"))
-                                } finally {
-                                    busy = false
-                                }
-                            }
-                        }
+                        ChatRunner.send(ctx.applicationContext, agentMode, prompt)
                     }) { Icon(Icons.Default.ArrowUpward, "发送", tint = Accent) }
                 }
                 Text(if (agentMode) "Agent 模式：可读写工作区文件、执行命令、构建并签名 APK；安装需你在系统弹窗确认。" else "普通对话模式：不调用任何工具。", Modifier.padding(start = 4.dp, top = 5.dp), color = Muted, fontSize = 10.sp)
@@ -287,7 +265,7 @@ private fun ChatPage(
     }
 }
 
-private fun requestChat(base: String, model: String, key: String, history: List<ChatMessage>): String {
+internal fun requestChat(base: String, model: String, key: String, history: List<ChatMessage>): String {
     var connection: HttpURLConnection? = null
     return try {
         connection = (URL(base.trimEnd('/') + "/chat/completions").openConnection() as HttpURLConnection).apply {

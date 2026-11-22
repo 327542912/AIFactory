@@ -24,46 +24,30 @@ fun RuntimeSetupCard() {
     val ctx = LocalContext.current
     val cfg = remember { AppConfig(ctx) }
     val rt = remember { RuntimeEngine(ctx) }
-    var status by remember { mutableStateOf(rt.statusReport()) }
+    // 安装状态放在进程级 SetupRunner：切页面不会取消下载/解压，也不会丢进度
+    val status = SetupRunner.status
+    val progress = SetupRunner.progress
+    val busy = SetupRunner.busy
     var bootUrl by remember { mutableStateOf(cfg.bootstrapUrl) }
     var bootSha by remember { mutableStateOf(cfg.bootstrapSha) }
     var sdkUrl by remember { mutableStateOf(cfg.sdkUrl) }
     var repoUrl by remember { mutableStateOf(cfg.repoUrl) }
     var mirror by remember { mutableStateOf(cfg.mirrorPrefix) }
-    var progress by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    fun launchTask(block: suspend () -> Unit) {
-        if (busy) return
-        busy = true
-        scope.launch {
-            try {
-                block()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                progress = "失败：${e.message}"
-            } finally {
-                busy = false
-                status = withContext(Dispatchers.IO) { rt.statusReport() }
-            }
-        }
-    }
+    LaunchedEffect(Unit) { SetupRunner.recompute(ctx) }
 
     val bootPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) launchTask {
-            ArchiveInstaller.installBootstrap(ctx, { ctx.contentResolver.openInputStream(uri)!! }) { progress = it }
+        if (uri != null) SetupRunner.run(ctx) {
+            ArchiveInstaller.installBootstrap(ctx, { ctx.contentResolver.openInputStream(uri)!! }) { msg -> SetupRunner.report(msg) }
         }
     }
     val sdkPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) launchTask {
-            ArchiveInstaller.installSdk(ctx, { ctx.contentResolver.openInputStream(uri)!! }) { progress = it }
+        if (uri != null) SetupRunner.run(ctx) {
+            ArchiveInstaller.installSdk(ctx, { ctx.contentResolver.openInputStream(uri)!! }) { msg -> SetupRunner.report(msg) }
         }
     }
 
     val debPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
-        if (!uris.isNullOrEmpty()) launchTask {
+        if (!uris.isNullOrEmpty()) SetupRunner.run(ctx) {
             val inbox = File(RuntimePaths.home(ctx), ".aifactory/inbox").apply { mkdirs() }
             val saved = ArrayList<File>()
             withContext(Dispatchers.IO) {
@@ -73,12 +57,12 @@ fun RuntimeSetupCard() {
                     saved += f
                 }
             }
-            progress = "已拷入 ${saved.size} 个 deb（${saved.sumOf { it.length() } / 1048576} MB），开始安装…"
+            SetupRunner.report("已拷入 ${saved.size} 个 deb（${saved.sumOf { it.length() } / 1048576} MB），开始安装…")
             val cmd = "cd " + shQuote(inbox.path) + " && apt install -y " +
                 saved.joinToString(" ") { "./" + it.name } + " 2>&1"
             val r = rt.run(cmd, RuntimePaths.home(ctx), 3600)
-            progress = (if (r.ok) "本地包安装完成。" else "本地包安装失败（退出码 ${r.exitCode}）：") +
-                "\n" + tailText(r.output, 1500)
+            SetupRunner.report((if (r.ok) "本地包安装完成。" else "本地包安装失败（退出码 ${r.exitCode}）：") +
+                "\n" + tailText(r.output, 1500))
             saved.forEach { it.delete() }
         }
     }
@@ -109,7 +93,7 @@ fun RuntimeSetupCard() {
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy && bootUrl.isNotBlank(), onClick = {
-                    launchTask { ArchiveInstaller.installBootstrapFromUrl(ctx, bootUrl.trim(), bootSha, mirror, { progress = it }) }
+                    SetupRunner.run(ctx) { ArchiveInstaller.installBootstrapFromUrl(ctx, bootUrl.trim(), bootSha, mirror, { msg -> SetupRunner.report(msg) }) }
                 }) { Text("下载并安装") }
                 OutlinedButton(enabled = !busy, onClick = { bootPicker.launch(arrayOf("*/*")) }) { Text("选择本地 zip") }
             }
@@ -119,12 +103,12 @@ fun RuntimeSetupCard() {
             OutlinedTextField(repoUrl, { repoUrl = it; cfg.repoUrl = it }, label = { Text("apt 软件源地址") },
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Button(enabled = !busy && rt.isInstalled() && repoUrl.isNotBlank(), onClick = {
-                launchTask {
+                SetupRunner.run(ctx) {
                     val u = rt.configureAptRepo(repoUrl, cfg.extraRepoUrl)
-                    progress = "已写入软件源 $u，正在 apt update…"
+                    SetupRunner.report("已写入软件源 $u，正在 apt update…")
                     val r = rt.run("apt-get update 2>&1", RuntimePaths.home(ctx), 300)
-                    progress = (if (r.ok) "软件源可用。" else "apt update 失败（退出码 ${r.exitCode}）：") +
-                        "\n" + tailText(r.output, 900)
+                    SetupRunner.report((if (r.ok) "软件源可用。" else "apt update 失败（退出码 ${r.exitCode}）：") +
+                        "\n" + tailText(r.output, 900))
                 }
             }) { Text("写入软件源并更新") }
 
@@ -134,7 +118,7 @@ fun RuntimeSetupCard() {
                 singleLine = true, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy && sdkUrl.isNotBlank(), onClick = {
-                    launchTask { ArchiveInstaller.installSdkFromUrl(ctx, sdkUrl.trim(), mirror, { progress = it }) }
+                    SetupRunner.run(ctx) { ArchiveInstaller.installSdkFromUrl(ctx, sdkUrl.trim(), mirror, { msg -> SetupRunner.report(msg) }) }
                 }) { Text("下载并安装") }
                 OutlinedButton(enabled = !busy, onClick = { sdkPicker.launch(arrayOf("*/*")) }) { Text("选择本地 zip") }
             }

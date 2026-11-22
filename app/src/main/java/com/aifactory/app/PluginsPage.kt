@@ -68,59 +68,17 @@ fun PluginsPage() {
     }
 
     var marks by remember { mutableStateOf(specs.map { it.probe(prefix) }) }
-    var log by remember { mutableStateOf("") }
-    var running by remember { mutableStateOf("") }
+    // 安装状态挂在进程级 PluginRunner 上：切页面不会取消 apt，也不会丢日志
+    val log = PluginRunner.log
+    val running = PluginRunner.running
     val busy = running.isNotBlank()
 
     fun refresh() {
         marks = specs.map { it.probe(prefix) }
     }
 
-    fun install(spec: PluginSpec) {
-        if (busy) return
-        if (!rt.isInstalled()) {
-            log = "Runtime 未安装，先到设置页安装 bootstrap。"
-            return
-        }
-        running = spec.title
-        log = "准备安装 ${spec.packages.joinToString(" ")} …"
-        scope.launch {
-            // 不能用 pkg：termux-tools 的 pkg 会探测镜像，发现本仓库没有 InRelease 就判定 "bad"，
-            // 然后把 sources.list 改写成官方 termux 源（前缀 com.termux），把 runtime 带坏。
-            val pm = "apt-get"
-            var pre = ""
-            // Gradle 装在补充源里（apt 主源那份是 1.9.0.0，跑不动 AGP 8 工程）
-            if (spec.packages.any { it.startsWith("gradle") }) {
-                val sl = File(prefix, "etc/apt/sources.list")
-                val extra = cfg.extraRepoUrl
-                try {
-                    if (sl.exists() && !sl.readText().contains("runtime-extra")) {
-                        sl.appendText("\n# 补充源：Gradle 8.7 等\ndeb [trusted=yes] $extra ./\n")
-                    }
-                } catch (_: Throwable) {}
-                pre = "$pm update -y >/dev/null 2>&1; "
-            }
-            val cmd = "${pre}$pm install -y ${spec.packages.joinToString(" ")} 2>&1"
-            val sb = StringBuilder()
-            val r = try {
-                rt.run(cmd, RuntimePaths.home(ctx), 3600) { chunk ->
-                    sb.append(chunk)
-                    log = tailText(sb.toString(), 1800)
-                }
-            } catch (e: Throwable) {
-                running = ""
-                log = "安装失败：${e.message}"
-                return@launch
-            }
-            log = buildString {
-                append(if (r.ok) "安装完成（$pm）" else "安装失败，退出码 ${r.exitCode}（$pm）")
-                append('\n')
-                append(tailText(r.output.ifBlank { sb.toString() }, 1500))
-            }
-            running = ""
-            refresh()
-        }
-    }
+    // 从别的页面回来时重新探一次盘，保证 ✓/✗ 是文件系统事实而不是缓存
+    LaunchedEffect(Unit) { refresh() }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -155,11 +113,11 @@ fun PluginsPage() {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             enabled = !busy && rt.isInstalled() && !installed,
-                            onClick = { install(spec) }
+                            onClick = { PluginRunner.install(ctx, spec.title, spec.packages) }
                         ) { Text(if (running == spec.title) "安装中…" else "安装") }
                         OutlinedButton(
                             enabled = !busy && File(prefix, "bin/apt").exists(),
-                            onClick = { install(spec) }
+                            onClick = { PluginRunner.install(ctx, spec.title, spec.packages) }
                         ) { Text("重装/更新") }
                     }
                 }
