@@ -6,6 +6,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -48,10 +51,16 @@ class AgentEngine(private val ctx: Context) {
             mapOf("path" to "文件路径", "old" to "要替换的原文（必须唯一）", "new" to "新文本"), listOf("path", "old", "new")),
         ToolDef("list_dir", "列出目录内容。", mapOf("path" to "相对工作区的目录，默认工作区根"), emptyList()),
         ToolDef("toolchain_status", "查看 JDK/Gradle/SDK/aapt2/apksigner 是否就绪。", emptyMap(), emptyList()),
-        ToolDef("build_apk", "用 Gradle 构建项目并（release 时）签名，返回 APK 路径或错误日志。",
+        ToolDef("build_apk", "构建项目：有 app/src/main 布局时走本地工具链（aapt2+javac+D8+签名，零网络），并自动自检；否则走 Gradle。返回 APK 路径或错误日志。",
             mapOf("project" to "项目目录（相对工作区）", "release" to "true=签名的 release，false=debug（默认）"), listOf("project")),
         ToolDef("install_apk", "唤起系统安装器安装 APK（需要用户在弹窗中确认）。",
-            mapOf("path" to "APK 路径（build_apk 返回的路径）"), listOf("path"))
+            mapOf("path" to "APK 路径（build_apk 返回的路径）"), listOf("path")),
+        ToolDef("pipeline_status", "查看流水线现场：当前在跑什么、最近任务成功/失败、最近一次构建日志与产物、自检结果。排查问题时先调用它。",
+            emptyMap(), emptyList()),
+        ToolDef("read_log", "读取日志文件（默认最近一次任务日志），可指定行数。",
+            mapOf("path" to "日志路径，留空=最近一次", "lines" to "读取最后多少行，默认 200"), emptyList()),
+        ToolDef("remember", "把一条经验写进长期记忆（跨会话保留），用于自我改进：踩过的坑、验证有效的参数、环境限制。",
+            mapOf("note" to "要记住的一句话"), listOf("note"))
     )
 
     private fun toolSpecs(): JSONArray {
@@ -78,6 +87,17 @@ class AgentEngine(private val ctx: Context) {
         appendLine("只有用户明确要求安装时才调用 install_apk。不确定环境时先调用 toolchain_status；缺少工具链时告诉用户到 设置 → Runtime 安装，不要自行下载未知来源的二进制。")
         appendLine("可以用 apt-get install / pip / npm 安装依赖。不要用 pkg（会改写软件源）。apt 的源是本项目自建仓库，只包含已发布的包；找不到时告诉用户把包名加入 GitHub 工作流的 repo_packages 重新发布。不要手动改 apt 源为官方 Termux 仓库（路径前缀不同，会损坏 Runtime）。")
         appendLine("删除、覆盖大量文件前先向用户说明。回答使用中文，简洁。")
+        appendLine()
+        appendLine("【当前流水线现场（每次对话开始时自动刷新）】")
+        appendLine(Pipeline.snapshot(ctx).take(2500))
+        val mem = File(RuntimePaths.home(ctx), ".aifactory/memory.md")
+        if (mem.exists()) {
+            appendLine("【长期记忆（你之前用 remember 记下的经验）】")
+            appendLine(mem.readText().takeLast(1500))
+        }
+        appendLine("【自我改进要求】遇到失败先 pipeline_status + read_log 定位到具体一步，再改代码/环境；")
+        appendLine("导致失败的根因若是环境（缺包/缺库/权限），用 run_shell 修；若是代码，用 replace_in_file 修；")
+        appendLine("验证有效的做法或踩过的坑，用 remember 记下来，避免下次重复犯错。")
         if (!nativeTools) {
             appendLine()
             appendLine("【工具调用协议】需要调用工具时，只输出一个如下格式的代码块，然后停止，等待工具结果：")
@@ -286,6 +306,21 @@ class AgentEngine(private val ctx: Context) {
                 items.joinToString("\n") { (if (it.isDirectory) "[d] " else "    ") + it.name }.ifBlank { "(空目录)" }
             }
             "toolchain_status" -> packager.toolchainReport()
+            "pipeline_status" -> Pipeline.snapshot(ctx)
+            "read_log" -> {
+                val p = a.optString("path")
+                val lines = a.optString("lines").toIntOrNull() ?: 200
+                val f = if (p.isBlank()) Pipeline.lastLog else File(p)
+                if (f == null || !f.exists()) "没有日志文件：${p.ifBlank { "（没有任何任务日志）" }}"
+                else f.readLines().takeLast(lines.coerceIn(1, 5000)).joinToString("\n")
+            }
+            "remember" -> {
+                val note = a.getString("note")
+                val mem = File(RuntimePaths.home(ctx), ".aifactory/memory.md")
+                mem.parentFile?.mkdirs()
+                mem.appendText("- " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()) + " " + note + "\n")
+                "已记下。"
+            }
             "build_apk" -> {
                 val dir = resolve(a.getString("project"))
                 val release = a.optString("release").equals("true", ignoreCase = true)

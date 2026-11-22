@@ -154,6 +154,28 @@ internal object Pipeline {
         main.post { log = full; lastLog = saved }
     }
 
+    /** 给 Agent 用的现场快照：当前在跑什么、上个任务成功与否、最近日志、最近产物。 */
+    fun snapshot(ctx: Context): String = buildString {
+        appendLine("排队中：" + queued + "  运行中：" + (if (busy) (current.ifBlank { "是" }) else "否") +
+            (if (stage.isNotBlank()) " / 阶段：" + stage else ""))
+        appendLine("最近产物：" + (lastApk?.path ?: "无") + (lastPkg?.let { "  包名：" + it } ?: ""))
+        val lg = lastLog
+        appendLine("最近日志文件：" + (lg?.path ?: "无"))
+        if (lg != null && lg.exists()) {
+            appendLine("--- 日志开头 ---")
+            appendLine(lg.readText().take(1200))
+            appendLine("--- 日志末尾 ---")
+            appendLine(lg.readText().takeLast(1200))
+        }
+        runCatching {
+            val f = File(RuntimePaths.home(ctx), ".aifactory/jobs.json")
+            if (f.exists()) {
+                appendLine("--- 最近任务（jobs.json 末尾 6 条）---")
+                appendLine(f.readLines().takeLast(6).joinToString("\n"))
+            }
+        }
+    }
+
     private fun record(ctx: Context, title: String, ok: Boolean, ms: Long, summary: String) {
         runCatching {
             val f = File(RuntimePaths.home(ctx), ".aifactory/jobs.json")
