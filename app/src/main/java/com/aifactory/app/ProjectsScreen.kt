@@ -116,6 +116,19 @@ fun ProjectsScreen() {
             }
         }
     }
+    val aabExporter = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri: Uri? ->
+        val f = Pipeline.lastAab
+        if (uri != null && f != null) scope.launch(Dispatchers.IO) {
+            try {
+                ctx.contentResolver.openOutputStream(uri)?.use { o -> f.inputStream().use { it.copyTo(o) } }
+                Pipeline.appendNote("AAB 已导出：" + f.name)
+            } catch (e: Exception) {
+                Pipeline.appendNote("AAB 导出失败：" + e.message)
+            }
+        }
+    }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) scope.launch {
             Pipeline.appendNote(importArchive(ctx, rt, uri))
@@ -248,6 +261,10 @@ fun ProjectsScreen() {
                     if (r.ok) "✅ " + r.summary + "\n" + (r.releaseUrl ?: "") else "❌ " + r.summary
                 }
             }) { Text("发布到 GitHub") }
+            OutlinedButton(enabled = selected != null && !busy, onClick = {
+                val name = selected ?: return@OutlinedButton
+                Pipeline.buildAab(ctx, rt, File(rt.workspace, name))
+            }) { Text("构建 AAB（上架）") }
             if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
             TextButton(onClick = {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -262,6 +279,30 @@ fun ProjectsScreen() {
                     (if (Pipeline.queued > 0) "（排队 ${Pipeline.queued}）" else ""),
                 fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .7f)
             )
+        }
+
+        val aab = Pipeline.lastAab
+        if (aab != null) Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("AAB（上架产物）", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text(aab.path, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 17.sp)
+                Text("${aab.length() / 1024} KB · targetSdk " + AabBuilder.TARGET_SDK, fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
+                Button(onClick = { aabExporter.launch(aab.name) }) { Text("导出 AAB") }
+            }
+        } else {
+            val btJar = File(RuntimePaths.home(ctx), ".aifactory/bundletool.jar")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!btJar.exists()) {
+                    TextButton(enabled = !busy, onClick = {
+                        Pipeline.submit(ctx, "下载 bundletool", listOf("下载 32MB", "校验")) { report ->
+                            AabBuilder(ctx, rt).downloadBundletool { line -> report(line) }
+                        }
+                    }) { Text("下载 bundletool") }
+                }
+                Text("AAB 给「普通应用」上架用；AIFactory 本体不能上 Play。", fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
+            }
         }
 
         val out = apk

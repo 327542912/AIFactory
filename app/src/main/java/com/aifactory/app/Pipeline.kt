@@ -55,7 +55,10 @@ internal object Pipeline {
     var busy by mutableStateOf(false); private set
     var lastApk by mutableStateOf<File?>(null); private set
     /** 最近一次构建产物自检解析出的包名，安装后用它确认是否真的装上了。 */
-    var lastPkg by mutableStateOf<String?>(null); private set
+    var lastPkg by mutableStateOf<String?>(null)
+    /** 上架模式产物（AAB）。与 APK 分开存，避免「最近产物」卡把 aab 当 apk 装。 */
+    var lastAab by mutableStateOf<File?>(null); private set
+    var lastAabNote by mutableStateOf(""); private set
 
     /** 最近一次任务的完整日志文件（已落盘，可直接复制/导出）。 */
     var lastLog by mutableStateOf<File?>(null); private set
@@ -97,6 +100,23 @@ internal object Pipeline {
     }
 
     /** 项目构建的标准流水线：工具链 → gradle → 产物落 outputs。 */
+    fun buildAab(ctx: Context, rt: RuntimeEngine, dir: File) {
+        submit(
+            ctx,
+            "AAB 构建 " + dir.name,
+            listOf("准备工具链", "proto link", "dex", "打包 AAB", "签名")
+        ) { report ->
+            val ab = AabBuilder(ctx, rt).build(dir) { line -> report(line) }
+            if (ab.ok) {
+                main.post { lastAab = ab.aab; lastAabNote = ab.message }
+                ab.message
+            } else {
+                main.post { lastAabNote = ab.message }
+                ab.message
+            }
+        }
+    }
+
     fun buildProject(ctx: Context, pk: Packager, dir: File, release: Boolean, install: Boolean = false) {
         submit(
             ctx,
@@ -181,6 +201,7 @@ internal object Pipeline {
         appendLine("排队中：" + queued + "  运行中：" + (if (busy) (current.ifBlank { "是" }) else "否") +
             (if (stage.isNotBlank()) " / 阶段：" + stage else ""))
         appendLine("最近产物：" + (lastApk?.path ?: "无") + (lastPkg?.let { "  包名：" + it } ?: ""))
+        lastAab?.let { appendLine("最近 AAB：" + it.path) }
         val lg = lastLog
         appendLine("最近日志文件：" + (lg?.path ?: "无"))
         if (lg != null && lg.exists()) {
