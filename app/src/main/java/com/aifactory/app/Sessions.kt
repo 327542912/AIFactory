@@ -136,6 +136,10 @@ internal object PluginRunner {
 
     fun install(ctx: Context, title: String, packages: List<String>) {
         if (running.isNotBlank()) return
+        if (SetupRunner.busy) {
+            log = "设置页还有一个安装任务在跑，等它结束再点（两个 apt/dpkg 同时跑会抢 dpkg 锁）。"
+            return
+        }
         val rt = RuntimeEngine(ctx)
         if (!rt.isInstalled()) {
             log = "Runtime 未安装，先到设置页安装 bootstrap。"
@@ -216,6 +220,10 @@ internal object SetupRunner {
 
     fun run(ctx: Context, block: suspend () -> Unit) {
         if (busy) return
+        if (PluginRunner.running.isNotBlank()) {
+            progress = "插件安装正在进行（" + PluginRunner.running + "），等它结束再启动，否则会抢 dpkg 锁。"
+            return
+        }
         val app = ctx.applicationContext
         busy = true
         scope.launch {

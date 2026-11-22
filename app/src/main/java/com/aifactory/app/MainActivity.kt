@@ -159,7 +159,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
                             persistFileRecords(context, importedFiles)
                         }
                     )
-                    Page.TERMINAL -> TerminalPage(termBridge) { page = Page.SETTINGS }
+                    Page.TERMINAL -> TerminalPage(termBridge, dark) { page = Page.SETTINGS }
                     Page.PLUGINS -> PluginsPage()
                     Page.SETTINGS -> SettingsPage()
                 }

@@ -45,6 +45,43 @@ import java.io.File
  */
 class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, TerminalViewClient {
 
+    fun setDark(dark: Boolean) {
+        darkTheme = dark
+        applyTheme(dark)
+    }
+
+    private fun argb(hex: Long): Int = hex.toInt()
+
+    /** Termux 的调色板是按黑底设计的，不按主题切换会出现「白底浅字看不见」。 */
+    fun applyTheme(dark: Boolean) {
+        val p = com.termux.terminal.TerminalColors.COLOR_SCHEME.mDefaultColors
+        if (dark) {
+            p[0] = argb(0xFF111111); p[1] = argb(0xFFE06C75); p[2] = argb(0xFF98C379)
+            p[3] = argb(0xFFD19A66); p[4] = argb(0xFF61AFEF); p[5] = argb(0xFFC678DD)
+            p[6] = argb(0xFF56B6C2); p[7] = argb(0xFFBEBEBE)
+            p[8] = argb(0xFF7A7A7A); p[9] = argb(0xFFFF8A8A); p[10] = argb(0xFFB8E994)
+            p[11] = argb(0xFFF2C46B); p[12] = argb(0xFF7EC8FF); p[13] = argb(0xFFE3A5F0)
+            p[14] = argb(0xFF7FE3EE); p[15] = argb(0xFFFFFFFF)
+            p[com.termux.terminal.TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFFE6E4DF)
+            p[com.termux.terminal.TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFF171715)
+            p[com.termux.terminal.TextStyle.COLOR_INDEX_CURSOR] = argb(0xFFE6E4DF)
+        } else {
+            p[0] = argb(0xFF1B1B1B); p[1] = argb(0xFFA52019); p[2] = argb(0xFF2E6B32)
+            p[3] = argb(0xFF8A6A00); p[4] = argb(0xFF14539C); p[5] = argb(0xFF8A2E9E)
+            p[6] = argb(0xFF00696E); p[7] = argb(0xFF5A5A5A)
+            p[8] = argb(0xFF444444); p[9] = argb(0xFFC62828); p[10] = argb(0xFF2E7D32)
+            p[11] = argb(0xFF8D6E00); p[12] = argb(0xFF1565C0); p[13] = argb(0xFF9C27B0)
+            p[14] = argb(0xFF00777E); p[15] = argb(0xFF212121)
+            p[com.termux.terminal.TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFF1B1B1B)
+            p[com.termux.terminal.TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFFFFFFFF)
+            p[com.termux.terminal.TextStyle.COLOR_INDEX_CURSOR] = argb(0xFF1B1B1B)
+        }
+        view?.let { v ->
+            v.mEmulator?.mColors?.reset()
+            v.onScreenUpdated()
+        }
+    }
+
     @Volatile var ctrlDown = false
     @Volatile var altDown = false
     @Volatile private var view: TerminalView? = null
@@ -53,6 +90,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     /** 标题用普通字段，不进 Compose 快照：每次输出都写状态会让整页重组，这是卡顿的主因。 */
     @Volatile var currentTitle = "bash"
         private set
+    @Volatile private var darkTheme = false
     @Volatile private var finished = true
 
     /** 非空表示没有可用会话（例如 prefix 里的 bash 缺失），UI 直接展示这句话并给重装入口。 */
@@ -72,6 +110,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         val s = session?.takeIf { !finished } ?: startSession()
         if (s == null) return
         v.attachSession(s)
+        applyTheme(darkTheme)
         v.requestFocus()
         v.post { v.requestFocus() }
     }
@@ -243,7 +282,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
 }
 
 @Composable
-fun TerminalPage(bridge: AiTerminalBridge, onGoSettings: () -> Unit = {}) {
+fun TerminalPage(bridge: AiTerminalBridge, dark: Boolean = false, onGoSettings: () -> Unit = {}) {
     // 每秒轮询一次标题，避免 onTextChanged 每行输出都触发重组
     val title by produceState(initialValue = bridge.currentTitle) {
         while (true) {
@@ -252,6 +291,7 @@ fun TerminalPage(bridge: AiTerminalBridge, onGoSettings: () -> Unit = {}) {
         }
     }
     DisposableEffect(Unit) { onDispose { bridge.detachView() } }
+    LaunchedEffect(dark) { bridge.setDark(dark) }
     val problem by produceState(initialValue = bridge.problem) {
         while (true) { value = bridge.problem; kotlinx.coroutines.delay(500) }
     }

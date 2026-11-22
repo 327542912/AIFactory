@@ -167,6 +167,15 @@ fun RuntimeSetupCard() {
                     SetupRunner.report("dpkg 状态检查：\n" + tailText(r.output, 1200))
                 }
             }) { Text("修复 dpkg 状态") }
+            OutlinedButton(enabled = !busy && rt.isInstalled(), onClick = {
+                SetupRunner.run(ctx) {
+                    val cmd = "pkill -9 -f 'bin/apt-get' 2>/dev/null; pkill -9 -f 'bin/dpkg' 2>/dev/null; sleep 1; " +
+                        "rm -f \"\$PREFIX/var/lib/dpkg/lock-frontend\" \"\$PREFIX/var/lib/dpkg/lock\" \"\$PREFIX/var/lib/apt/lists/lock\"; " +
+                        "dpkg --configure -a 2>&1 | tail -8"
+                    val x = rt.run(cmd, RuntimePaths.home(ctx), 300)
+                    SetupRunner.report("已强制清理锁并重配：\n" + tailText(x.output, 1000))
+                }
+            }) { Text("清理卡死的 apt/dpkg 锁") }
 
             Text(
                 "Runtime 与 SDK 都由本仓库的 GitHub Actions 构建（包名 com.aifactory.app）。SDK 内含 platforms/android-34/35/36 与 build-tools/34.0.0/35.0.0/36.0.0，" +
