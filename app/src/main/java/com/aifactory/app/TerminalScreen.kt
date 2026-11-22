@@ -76,7 +76,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
             p[14] = argb(0xFF7FE3EE); p[15] = argb(0xFFFFFFFF)
             p[TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFFE6E4DF)
             p[TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFF171715)
-            p[TextStyle.COLOR_INDEX_CURSOR] = argb(0xFFE6E4DF)
+            p[TextStyle.COLOR_INDEX_CURSOR] = argb(0xFFF2C46B)
         } else {
             p[0] = argb(0xFF1B1B1B); p[1] = argb(0xFFA52019); p[2] = argb(0xFF2E6B32)
             p[3] = argb(0xFF8A6A00); p[4] = argb(0xFF14539C); p[5] = argb(0xFF8A2E9E)
@@ -86,7 +86,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
             p[14] = argb(0xFF00777E); p[15] = argb(0xFF212121)
             p[TextStyle.COLOR_INDEX_FOREGROUND] = argb(0xFF1B1B1B)
             p[TextStyle.COLOR_INDEX_BACKGROUND] = argb(0xFFFFFFFF)
-            p[TextStyle.COLOR_INDEX_CURSOR] = argb(0xFF1B1B1B)
+            p[TextStyle.COLOR_INDEX_CURSOR] = argb(0xFFB4553C)
         }
         view?.let { v ->
             v.mEmulator?.mColors?.reset()
@@ -369,10 +369,14 @@ fun TerminalPage(host: TerminalHost, dark: Boolean = false, onGoSettings: () -> 
 
         // 标签栏：切标签、关标签、新建。标签各自独立，互不干扰。
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+          Row(
+            Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+          ) {
             host.all().forEachIndexed { i, b ->
                 val sel = i == active
                 Row(
@@ -383,22 +387,29 @@ fun TerminalPage(host: TerminalHost, dark: Boolean = false, onGoSettings: () -> 
                         .background(if (sel) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
                         .padding(start = 10.dp, end = 2.dp, top = 2.dp, bottom = 2.dp)
                 ) {
+                    if (sel) Text("●", fontSize = 9.sp, color = MaterialTheme.colorScheme.primary)
                     Text(
                         (if (b.isFinished()) "已退出 " else "bash ") + (i + 1),
                         fontSize = 12.sp,
-                        fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (b.isFinished()) Color(0xFFB4553C) else MaterialTheme.colorScheme.onSurface
+                        fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
+                        color = if (b.isFinished()) Color(0xFFB4553C)
+                        else if (sel) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = .75f)
                     )
                     if (host.count() > 1) {
                         TextButton(
                             onClick = { host.close(i) },
                             contentPadding = PaddingValues(0.dp),
                             modifier = Modifier.size(26.dp)
-                        ) { Text("×", fontSize = 13.sp, color = Muted) }
+                        ) { Text("×", fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                            color = if (sel) MaterialTheme.colorScheme.onSurface else Muted) }
                     }
                 }
             }
-            TextButton(onClick = { host.add() }) { Text("+ 新标签", fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+          }
+          TextButton(onClick = { host.add() }, contentPadding = PaddingValues(horizontal = 6.dp)) {
+              Text("+ 新标签", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+          }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
