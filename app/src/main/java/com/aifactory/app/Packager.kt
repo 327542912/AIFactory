@@ -270,7 +270,10 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
 }
 
 object Installer {
-    /** 唤起系统安装器；返回给用户看的提示。 */
+    /**
+     * 唤起系统安装器；返回给用户看的提示。
+     * 任何异常都转成文字返回：这里抛异常会直接让 App 闪退（FileProvider 找不到匹配 root 就是这样）。
+     */
     fun install(ctx: Context, apk: File): String {
         if (!apk.exists()) return "APK 不存在：${apk.path}"
         if (!ctx.packageManager.canRequestPackageInstalls()) {
@@ -279,7 +282,22 @@ object Installer {
             ctx.startActivity(i)
             return "需要先允许 AIFactory 安装未知应用，已打开设置页。允许后请再次点击安装。"
         }
-        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", apk)
+        val first = runCatching { launch(ctx, apk) }
+        first.getOrNull()?.let { return it }
+        // 退路：拷到 cache 目录再试一次（cache-path 一定在授权范围内）
+        val second = runCatching {
+            val dir = File(ctx.cacheDir, "apks").apply { mkdirs() }
+            val copy = File(dir, apk.name)
+            apk.copyTo(copy, overwrite = true)
+            launch(ctx, copy)
+        }
+        return second.getOrElse {
+            "唤起安装器失败：" + (first.exceptionOrNull()?.message ?: "") + " / " + it.message
+        }
+    }
+
+    private fun launch(ctx: Context, file: File): String {
+        val uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", file)
         val i = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, "application/vnd.android.package-archive")
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)

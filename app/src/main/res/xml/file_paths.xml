@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <files-path name="outputs" path="outputs/" />
+    <files-path name="files_root" path="." />
+    <cache-path name="cache_root" path="." />
+    <external-files-path name="ext_files" path="." />
 </paths>
