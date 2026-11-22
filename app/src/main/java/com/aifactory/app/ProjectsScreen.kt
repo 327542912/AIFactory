@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -180,7 +181,7 @@ fun ProjectsScreen() {
                         TextButton(onClick = { showNew = false; prdPreview = null }) { Text("取消") }
                     }
                     prdPreview?.let { text ->
-                        HorizontalDivider()
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.onSurface.copy(alpha = .12f)))
                         Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                             Text(text, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 17.sp)
                         }
