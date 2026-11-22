@@ -216,7 +216,7 @@ app/src/main/java/com/aifactory/app/
 
 | tag | 资产 | 说明 |
 |---|---|---|
-| [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,610,948 B，sha256 `1738bf87…0d750d` |
+| [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,611,216 B，sha256 `45730c16…486343`（内含 runtime-repo + runtime-extra 两条源） |
 | [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | 264 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源，含 `openjdk-21` / `git` / `apksigner` / `zip` / `unzip`；**流水线每次重跑整份重建** |
 | [`runtime-extra`](https://github.com/327542912/AIFactory/releases/tag/runtime-extra) | `gradle_8.7-1_all.deb` + `Packages`（手动维护） | `gradle 1.9.0.0` 替代品，131,417,012 B，sha256 `027493b1…3ce09`；流水线不碰它 |
 | [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 143,210,636 B，sha256 `70d10e0a…6faa3`（3 个 platform + 3 个 build-tools + arm64 adb） |
