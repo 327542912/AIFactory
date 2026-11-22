@@ -55,10 +55,11 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
     fun missingTools(projectDir: File? = null): List<String> {
         val m = ArrayList<String>()
         if (!hasFile("bin/java") && !hasFile("opt/openjdk/bin/java")) m += "JDK（java）"
+        val gradleProject = projectDir != null && isGradleProject(projectDir)
         val hasWrapper = projectDir != null && File(projectDir, "gradlew").exists()
-        if (!hasFile("bin/gradle") && !hasWrapper) {
+        if (gradleProject && !hasFile("bin/gradle") && !hasWrapper) {
             m += "gradle"
-        } else if (!hasWrapper && !hasFile("opt/gradle-8.7/bin/gradle")) {
+        } else if (gradleProject && !hasWrapper && !hasFile("opt/gradle-8.7/bin/gradle")) {
             // apt 源里的 gradle 配方是 1.9.0.0，跑不动 AGP 8.x
             m += "Gradle 8.x（当前不是 8.7，1.9 无法构建 AGP 8 工程）"
         }
@@ -94,6 +95,10 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         f.writeText((keep + "sdk.dir=${sdk.path}").joinToString("\n") + "\n")
     }
 
+    /** 有 settings.gradle 的是标准 Gradle 工程；没有的是「裸工程」，走不依赖网络的本地工具链。 */
+    private fun isGradleProject(root: File): Boolean =
+        File(root, "settings.gradle").exists() || File(root, "settings.gradle.kts").exists()
+
     suspend fun build(
         projectDir: File,
         release: Boolean,
@@ -101,6 +106,7 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
     ): BuildResult {
         if (!projectDir.isDirectory) return BuildResult(false, null, "项目目录不存在：${projectDir.path}", "")
         val root = findProjectRoot(projectDir)
+        if (!isGradleProject(root)) return buildPlain(root, onOutput)
         val missing = missingTools(root)
         if (missing.isNotEmpty()) {
             return BuildResult(
@@ -146,6 +152,85 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         out.parentFile?.mkdirs()
         finalApk.copyTo(out, overwrite = true)
         return BuildResult(true, out, "构建成功：${out.name}（${out.length() / 1024} KB）", r.output)
+    }
+
+    /**
+     * 不依赖 Gradle、不依赖网络的构建：aapt2 → javac → D8 → 打包 → zipalign → apksigner。
+     * 生成的 build.sh 与真机实测通过的那条链一致，全部用手机本地二进制。
+     */
+    private suspend fun buildPlain(root: File, onOutput: ((String) -> Unit)?): BuildResult {
+        val bt = latestBuildTools(sdk)
+            ?: return BuildResult(false, null, "找不到 Android SDK build-tools。", "")
+        val platform = File(sdk, "platforms").listFiles()
+            ?.filter { it.isDirectory && File(it, "android.jar").exists() }
+            ?.maxWithOrNull(Comparator { a, b -> cmpVersion(a.name, b.name) })
+            ?: return BuildResult(false, null, "找不到 Android SDK platforms（缺 android.jar）。", "")
+        val aapt2 = aapt2Path()
+            ?: return BuildResult(false, null, "找不到 aapt2。", "")
+        val manifest = File(root, "app/src/main/AndroidManifest.xml")
+        if (!manifest.exists()) {
+            return BuildResult(false, null, "项目里没有 app/src/main/AndroidManifest.xml，无法本地编译。", "")
+        }
+        ensureKeystore()?.let { return BuildResult(false, null, it, "") }
+
+        val jar = File(platform, "android.jar").path
+        val javaBin = if (hasFile("bin/java")) File(prefix, "bin/java").path else "java"
+        val javacBin = if (hasFile("bin/javac")) File(prefix, "bin/javac").path else "javac"
+        val ks = keystoreFile()
+        val d8Jar = File(bt, "lib/d8.jar")
+        if (!d8Jar.exists()) return BuildResult(false, null, "build-tools 里没有 lib/d8.jar。", "")
+        val signerJar = File(bt, "lib/apksigner.jar")
+        if (!signerJar.exists()) return BuildResult(false, null, "build-tools 里没有 lib/apksigner.jar。", "")
+
+        val q = ::shQuote
+        val b = File(root, "app/build")
+        b.mkdirs()
+        val script = File(b, "aifactory-build.sh")
+        script.writeText(
+            buildString {
+                appendLine("set -e")
+                appendLine("P=" + q(root.path))
+                appendLine("B=" + q(b.path))
+                appendLine("AAPT2=" + q(aapt2))
+                appendLine("JAR=" + q(jar))
+                appendLine("BT=" + q(bt.path))
+                appendLine("rm -rf \$B")
+                appendLine("mkdir -p \$B/res \$B/gen \$B/classes \$B/dex")
+                appendLine("if [ -d \$P/app/src/main/res ]; then")
+                appendLine("  \$AAPT2 compile --dir \$P/app/src/main/res -o \$B/res")
+                appendLine("  \$AAPT2 link -o \$B/base.apk -I \$JAR --manifest \$P/app/src/main/AndroidManifest.xml -R \$B/res --java \$B/gen")
+                appendLine("else")
+                appendLine("  \$AAPT2 link -o \$B/base.apk -I \$JAR --manifest \$P/app/src/main/AndroidManifest.xml --java \$B/gen")
+                appendLine("fi")
+                appendLine("find \$P/app/src/main/java \$B/gen -name \"*.java\" > \$B/srcs")
+                appendLine(q(javacBin) + " -source 8 -target 8 -bootclasspath \$JAR -d \$B/classes @\$B/srcs")
+                appendLine("find \$B/classes -name \"*.class\" > \$B/classes.lst")
+                appendLine(q(javaBin) + " -Xmx768m -cp \$BT/lib/d8.jar com.android.tools.r8.D8 --lib \$JAR --min-api 26 --output \$B/dex \$(cat \$B/classes.lst)")
+                appendLine("cp \$B/base.apk \$B/u.apk")
+                appendLine("cd \$B/dex && jar uf \$B/u.apk classes.dex && cd \$P")
+                appendLine("\$BT/zipalign -f 4 \$B/u.apk \$B/a.apk || cp \$B/u.apk \$B/a.apk")
+                appendLine(q(javaBin) + " -jar \$BT/lib/apksigner.jar sign --min-sdk-version 26 --ks " + q(ks.path) +
+                    " --ks-pass env:AIF_KS_PASS --key-pass env:AIF_KS_PASS \$B/a.apk")
+                appendLine("mkdir -p \$B/outputs/apk/debug")
+                appendLine("cp \$B/a.apk \$B/outputs/apk/debug/app-debug.apk")
+                appendLine("ls -l \$B/outputs/apk/debug/app-debug.apk")
+            }
+        )
+        val started = System.currentTimeMillis()
+        val r = rt.run(
+            "sh " + q(script.path), root, 1800, mapOf("AIF_KS_PASS" to cfg.keystorePassword), onOutput
+        )
+        if (r.cancelled) return BuildResult(false, null, "构建已取消。", r.output)
+        if (r.timedOut) return BuildResult(false, null, "本地编译超时（30 分钟）。", r.output)
+        val apk = File(b, "outputs/apk/debug/app-debug.apk")
+        if (!r.ok || !apk.exists()) {
+            return BuildResult(false, null, "本地编译失败（退出码 " + r.exitCode + "）：\n" + tailText(r.output, 2500), r.output)
+        }
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val out = File(RuntimePaths.outputs(ctx), root.name + "-debug-" + stamp + ".apk")
+        out.parentFile?.mkdirs()
+        apk.copyTo(out, overwrite = true)
+        return BuildResult(true, out, "构建成功（本地工具链，零网络）：" + out.name + "（" + out.length() / 1024 + " KB）", r.output)
     }
 
     private fun keystoreFile() = File(home, ".aifactory/release.jks")
