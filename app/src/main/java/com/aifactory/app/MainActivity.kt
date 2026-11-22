@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -206,18 +207,28 @@ private fun ChatPage(
             Surface(shape = CircleShape, color = Accent.copy(alpha = .14f)) { Icon(Icons.Default.AutoAwesome, null, Modifier.padding(9.dp), tint = Accent) }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text("AI 工程师", fontWeight = FontWeight.SemiBold)
-                Text(if (apiKey.isBlank()) "模型尚未配置" else "模型：$model", color = Muted, fontSize = 11.sp)
+                Text("AI 工程师", fontWeight = FontWeight.SemiBold, maxLines = 1)
                 Text(
-                    if (rtInfo.isInstalled()) "Runtime：本机 bash · " + RuntimePaths.prefix(ctx).path
-                    else "Runtime 未安装：命令会落到系统 sh（能力不完整）",
-                    color = if (rtInfo.isInstalled()) Muted else MaterialTheme.colorScheme.error, fontSize = 10.sp
+                    (if (apiKey.isBlank()) "模型未配置" else "$model") +
+                        (if (rtInfo.isInstalled()) " · Runtime 本机 ✓" else " · Runtime 未装"),
+                    color = if (rtInfo.isInstalled()) Muted else MaterialTheme.colorScheme.error,
+                    fontSize = 11.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )
             }
-            TextButton(onClick = { ChatRunner.newChat(ctx.applicationContext) }) { Text("＋ 新对话") }
-            TextButton(onClick = { showHistory = !showHistory }) { Text("历史") }
             TextButton(onClick = { agentMode = !agentMode }) { Text(if (agentMode) "Agent：开" else "Agent：关") }
-            TextButton(onClick = { showSettings = !showSettings }) { Text("模型设置") }
+        }
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = { ChatRunner.newChat(ctx.applicationContext) }) { Text("＋ 新对话", fontSize = 12.sp) }
+            TextButton(onClick = { showHistory = !showHistory }) { Text("历史", fontSize = 12.sp) }
+            TextButton(onClick = { showSettings = !showSettings }) { Text("模型设置", fontSize = 12.sp) }
+            TextButton(onClick = {
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("chat", messages.joinToString("\n\n") { it.text }))
+                Pipeline.appendNote("已复制本会话 " + messages.size + " 条消息")
+            }) { Text("复制全部", fontSize = 12.sp) }
         }
         if (showHistory) {
             Card(Modifier.fillMaxWidth().padding(horizontal = 14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
