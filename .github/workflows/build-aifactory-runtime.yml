@@ -229,6 +229,9 @@ jobs:
           # openjdk-21 去掉 alsa-plugins：否则要连带冷编 pulseaudio/libsndfile/flac/opus/vorbis
           # 整条音频链（headless 开发工作台不需要 pulse 输出，alsa-lib 仍保留为 build 依赖）
           sed -i 's|, alsa-plugins"|"|' packages/openjdk-21/build.sh
+          # Apache 官方下载站只留最新版，旧版本（apr-util 1.6.3 等）一律 404。
+          # archive.apache.org 保留全部历史版本，路径一致，SHA256 逐字节相同（已核对 2b74d893…）
+          sed -i 's|https://downloads.apache.org/|https://archive.apache.org/dist/|g' packages/*/build.sh || true
           grep -n 'TERMUX_PKG_SRCURL=\|TERMUX_PKG_DEPENDS=' packages/giflib/build.sh packages/git/build.sh packages/openjdk-21/build.sh
 
       - name: Fix CMake policy minimum for old recipes
