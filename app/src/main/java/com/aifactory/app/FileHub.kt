@@ -132,7 +132,8 @@ fun FileCenterPage(
     files: List<FileRecord>,
     onImport: () -> Unit,
     onOpen: (FileRecord) -> Unit,
-    onRemove: (FileRecord) -> Unit
+    onRemove: (FileRecord) -> Unit,
+    onCopyToProjects: (FileRecord) -> Unit = {}
 ) {
     Column(
         Modifier.fillMaxSize().padding(16.dp),
@@ -209,6 +210,9 @@ fun FileCenterPage(
                                     maxLines = 2
                                 )
                             }
+                            IconButton(onClick = { onCopyToProjects(file) }) {
+                                Icon(Icons.Default.DriveFileMove, "复制到 ~/projects")
+                            }
                             IconButton(onClick = { onRemove(file) }) {
                                 Icon(Icons.Default.DeleteOutline, "移除记录")
                             }
@@ -218,4 +222,17 @@ fun FileCenterPage(
             }
         }
     }
+}
+
+
+/** 把 SAF 里选中的文件真正拷进 ~/projects（终端能直接用）。返回 null 表示成功。 */
+fun copyFileToProjects(context: android.content.Context, record: FileRecord): String? = try {
+    val ws = RuntimePaths.workspace(context).apply { mkdirs() }
+    val out = File(ws, record.name)
+    context.contentResolver.openInputStream(android.net.Uri.parse(record.uri))?.use { ins ->
+        out.outputStream().use { ins.copyTo(it, 1 shl 16) }
+    } ?: return "打不开源文件（授权可能已失效，重新导入一次）"
+    null
+} catch (e: Throwable) {
+    e.message ?: "复制失败"
 }

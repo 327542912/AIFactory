@@ -41,6 +41,14 @@ internal val Accent = Color(0xFFB66B45)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // targetSdk 28 走 legacy storage：拿到 READ/WRITE_EXTERNAL_STORAGE 后终端才能读 /sdcard
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            val need = listOf(
+                android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1001)
+        }
         Thread { runCatching { RuntimeRepair.ensureUsr(applicationContext) } }.start()
         setContent {
             AIFactoryApp { command ->
@@ -136,6 +144,14 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
                             if (error != null) {
                                 android.widget.Toast.makeText(context, error, android.widget.Toast.LENGTH_LONG).show()
                             }
+                        },
+                        onCopyToProjects = { file ->
+                            val err = copyFileToProjects(context, file)
+                            android.widget.Toast.makeText(
+                                context,
+                                err ?: ("已复制到 ~/projects/" + file.name),
+                                if (err == null) android.widget.Toast.LENGTH_SHORT else android.widget.Toast.LENGTH_LONG
+                            ).show()
                         },
                         onRemove = { file ->
                             importedFiles.remove(file)
