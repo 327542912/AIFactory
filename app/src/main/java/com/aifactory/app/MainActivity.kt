@@ -428,21 +428,6 @@ private fun TerminalPage(runCommand: suspend (String) -> String) {
 }
 
 @Composable
-private fun PluginsPage() {
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("插件中心", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("插件协议和隔离运行时属于后续里程碑。首版不执行未审查的第三方插件。", color = Muted)
-        listOf("Gradle / Android Build", "CMake / Native Build", "Git Integration", "Python Runtime").forEach { name ->
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Extension, null, tint = Accent); Spacer(Modifier.width(12.dp)); Text(name, Modifier.weight(1f)); Text("规划中", color = Muted, fontSize = 11.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun SettingsPage() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
