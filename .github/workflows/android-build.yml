@@ -12,7 +12,7 @@ on:
       - ".github/workflows/android-build.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: aifactory-android-${{ github.ref }}
@@ -61,4 +61,24 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      # 让仓库里的 apk/AIFactory-latest.apk 永远是最新的（手机端可一键下载）
+      - name: Sync APK into main:apk/
+        run: |
+          set -euo pipefail
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          mkdir -p /tmp/apkout
+          cp app/build/outputs/apk/debug/app-debug.apk "/tmp/apkout/AIFactory-${VER}-debug.apk"
+          cp "/tmp/apkout/AIFactory-${VER}-debug.apk" /tmp/apkout/AIFactory-latest.apk
+          (cd /tmp/apkout && for f in *.apk; do sha256sum "$f" > "$f.sha256"; done)
+          git config user.name "aifactory-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git fetch --depth 1 origin main
+          git checkout -B main FETCH_HEAD
+          rm -rf apk && mkdir -p apk
+          cp /tmp/apkout/*.apk /tmp/apkout/*.sha256 apk/
+          git add apk
+          if git diff --cached --quiet; then echo "apk 无变化，跳过提交"; exit 0; fi
+          git commit -m "apk: sync ${VER} (${GITHUB_SHA:0:8})"
+          git push origin main
 
