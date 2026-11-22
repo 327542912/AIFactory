@@ -78,8 +78,9 @@ class AabBuilder(private val ctx: Context, private val rt: RuntimeEngine) {
         ?: return AabResult(false, null, "找不到 aapt2。", "")
         val d8 = File(bt, "lib/d8.jar")
         if (!d8.exists()) return AabResult(false, null, "build-tools 缺 lib/d8.jar。", "")
-        val manifest = File(root, "app/src/main/AndroidManifest.xml")
-        if (!manifest.exists()) return AabResult(false, null, "没有 app/src/main/AndroidManifest.xml，不是可编译工程。", "")
+        val lay = projectLayout(root, onOutput)
+            ?: return AabResult(false, null, "找不到 java + AndroidManifest.xml 布局（app/src/main 或 src/main），无法产 AAB。", "")
+        val manifest = lay.manifest
         val jarDir = bundletoolFile()
         if (!jarDir.exists()) {
             return AabResult(
@@ -112,24 +113,26 @@ class AabBuilder(private val ctx: Context, private val rt: RuntimeEngine) {
             appendLine("BUNDLE=" + q(jarDir.path))
             appendLine("rm -rf \$B && mkdir -p \$B/res \$B/gen \$B/classes \$B/mod/manifest \$B/mod/dex \$B/mod/res")
             // 清单缺 package 就注入：aapt2 只认 package，AGP 的 namespace 在这里无效
-            appendLine("if grep -q 'package=\"' \$P/app/src/main/AndroidManifest.xml; then")
-            appendLine("  cp \$P/app/src/main/AndroidManifest.xml \$B/AndroidManifest.xml")
+            appendLine("if grep -q 'package=\"' " + q(manifest.path) + "; then")
+            appendLine("  cp " + q(manifest.path) + " \$B/AndroidManifest.xml")
             appendLine("else")
             val injected = pkg ?: ("com.example." + root.name.lowercase().replace(Regex("[^a-z0-9]"), "").ifBlank { "app" })
-            appendLine("  sed '0,/<manifest /s//<manifest package=\"" + injected + "\" /' \$P/app/src/main/AndroidManifest.xml > \$B/AndroidManifest.xml")
+            appendLine("  sed '0,/<manifest /s//<manifest package=\"" + injected + "\" /' " + q(manifest.path) + " > \$B/AndroidManifest.xml")
             appendLine("fi")
             appendLine("echo 清单包名：\$(" + "grep -o 'package=\"[^\"]*\"' \$B/AndroidManifest.xml | head -1)")
-            appendLine("if [ -d \$P/app/src/main/res ]; then")
-            appendLine("  \$AAPT2 compile --dir \$P/app/src/main/res -o \$B/res.zip")
-            appendLine("  \$AAPT2 link --proto-format -o \$B/base.apk -I \$JAR --manifest \$B/AndroidManifest.xml " +
-                "--min-sdk-version 26 --target-sdk-version " + TARGET_SDK + " --version-code " + vc + " --version-name " + q(vn) +
-                " -R \$B/res.zip --java \$B/gen --auto-add-overlay")
-            appendLine("else")
-            appendLine("  \$AAPT2 link --proto-format -o \$B/base.apk -I \$JAR --manifest \$B/AndroidManifest.xml " +
-                "--min-sdk-version 26 --target-sdk-version " + TARGET_SDK + " --version-code " + vc + " --version-name " + q(vn) +
-                " --java \$B/gen --auto-add-overlay")
-            appendLine("fi")
-            appendLine("find \$P/app/src/main/java \$B/gen -name '*.java' > \$B/srcs")
+            val srcList = lay.javaDirs.joinToString(" ") { q(it.path) }
+            val resDir = lay.res
+            if (resDir != null) {
+                appendLine("\$AAPT2 compile --dir " + q(resDir.path) + " -o \$B/res.zip")
+                appendLine("\$AAPT2 link --proto-format -o \$B/base.apk -I \$JAR --manifest \$B/AndroidManifest.xml " +
+                    "--min-sdk-version 26 --target-sdk-version " + TARGET_SDK + " --version-code " + vc + " --version-name " + q(vn) +
+                    " -R \$B/res.zip --java \$B/gen --auto-add-overlay")
+            } else {
+                appendLine("\$AAPT2 link --proto-format -o \$B/base.apk -I \$JAR --manifest \$B/AndroidManifest.xml " +
+                    "--min-sdk-version 26 --target-sdk-version " + TARGET_SDK + " --version-code " + vc + " --version-name " + q(vn) +
+                    " --java \$B/gen --auto-add-overlay")
+            }
+            appendLine("find " + srcList + " \$B/gen -name '*.java' > \$B/srcs")
             appendLine(q(javacBin) + " -source 8 -target 8 -nowarn -bootclasspath \$JAR -d \$B/classes @\$B/srcs")
             appendLine("find \$B/classes -name '*.class' > \$B/classes.lst")
             appendLine(q(javaBin) + " -Xmx768m -cp \$BT/lib/d8.jar com.android.tools.r8.D8 --lib \$JAR --min-api 26 --output \$B/mod/dex \$(" + "cat \$B/classes.lst)")
@@ -139,7 +142,7 @@ class AabBuilder(private val ctx: Context, private val rt: RuntimeEngine) {
             appendLine("cp \$B/linked/resources.pb \$B/mod/resources.pb")
             appendLine("if [ -d \$B/linked/res ]; then cp -r \$B/linked/res/. \$B/mod/res/; fi")
             // assets 也要带上，否则会有资源读不到
-            appendLine("if [ -d \$P/app/src/main/assets ]; then mkdir -p \$B/mod/assets && cp -r \$P/app/src/main/assets/. \$B/mod/assets/; fi")
+            lay.assets?.let { a -> appendLine("mkdir -p \$B/mod/assets && cp -r " + q(a.path) + "/. \$B/mod/assets/") }
             appendLine("cd \$B/mod && jar cfM \$B/base.zip . && cd \$P")
             appendLine("mkdir -p \$P/app/build/outputs/bundle")
             appendLine(q(javaBin) + " -jar \$BUNDLE build-bundle --modules=\$B/base.zip --output=\$P/app/build/outputs/bundle/app-release.aab")

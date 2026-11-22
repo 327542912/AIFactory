@@ -381,7 +381,14 @@ private fun GitHubCard() {
             OutlinedTextField(token, { token = it; cfg.ghToken = it }, label = { Text("Token（需 repo 权限）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(tag, { tag = it; cfg.ghTagPrefix = it }, label = { Text("tag 前缀（默认 build）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Text("仓库留空时：按 Token 读账号名，用项目名自动新建 public 仓库并回填到上面。也可手填已有 owner/repo。Token 存应用私有存储。", fontSize = 11.sp, color = Muted)
-            Text("Google Play：本机做不到自动上架。Play 只收 AAB（需要 bundletool 与 JDK 的签名链），且必须有 Play 开发者账号与服务账号 JSON、过审。当前版本不提供该通道，硬要做要在 CI 里跑（GitHub Actions 已经能做，见仓库 master 分支工作流）。", fontSize = 11.sp, color = Muted)
+            Text(
+                "Google Play（2026 现状，别被旧文案误导）：\n" +
+                "① 本机可以产 AAB：项目页「构建 AAB（上架）」走 aapt2 --proto-format → bundletool → jarsigner，产物在 files/outputs/*.aab。\n" +
+                "② 但 Play 只收 targetSdk ≥ 36 的应用，而 AIFactory 自身必须 targetSdk 28 才能 exec 私有目录二进制；且它要下发执行 ELF，命中 Device and Network Abuse 的“禁止从非 Play 来源下载可执行代码”。所以 AIFactory 本体永远上不了 Play。\n" +
+                "③ 能上 Play 的是它编出来的普通应用（纯 java、无 .so）：用「构建 AAB」产 AAB，自己上传。\n" +
+                "④ 自动上传要 Play 开发者账号 + 服务账号 JSON（apps 记录必须在 Console 手工建一次，API 建不了）。",
+                fontSize = 11.sp, color = Muted
+            )
         }
     }
 }

@@ -175,7 +175,10 @@ internal object Pipeline {
             "失败：" + (e.message ?: e.javaClass.simpleName)
         }
 
-        val ok = !result.startsWith("失败")
+        // 失败判定要覆盖各模块自己的措辞：早期只认 "失败" 前缀，于是 "构建失败（退出码 1）"
+        // 被当成成功打了 ✅，用户看到"✅ 构建失败"这种自相矛盾的东西。
+        val firstLine = result.lineSequence().firstOrNull() ?: ""
+        val ok = !(firstLine.contains("失败") || firstLine.contains("未通过") || firstLine.contains("❌") || firstLine.contains("已取消"))
         val full = log + "\n" + (if (ok) "✅ " else "❌ ") + result
         val totalMs = System.currentTimeMillis() - started
         main.post { lastMs = totalMs }

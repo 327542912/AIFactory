@@ -330,6 +330,11 @@ fun ProjectsScreen() {
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            OutlinedButton(onClick = {
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("aifactory-log", Pipeline.log))
+                Pipeline.appendNote("已复制日志（" + Pipeline.log.length + " 字）到剪贴板")
+            }) { Text("复制日志") }
             OutlinedButton(onClick = { logExporter.launch("aifactory-build.log") }) { Text("导出日志") }
             Text(
                 Pipeline.lastLog?.let { "存档：" + it.name } ?: "日志未存档",

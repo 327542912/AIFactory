@@ -99,6 +99,13 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
     private fun isGradleProject(root: File): Boolean =
         File(root, "settings.gradle").exists() || File(root, "settings.gradle.kts").exists()
 
+    /** 一个工程主干：清单在哪、java 源码在哪、res/assets 在哪。支持 app/src/main 与 src/main 两种布局。 */
+    data class Layout(val manifest: File, val javaDirs: List<File>, val res: File?, val assets: File?
+
+    )
+
+    fun layoutOf(root: File, onOutput: ((String) -> Unit)? = null): Layout? = projectLayout(root, onOutput)
+
     suspend fun build(
         projectDir: File,
         release: Boolean,
@@ -108,11 +115,21 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         val root = findProjectRoot(projectDir)
         // 有标准 app/ 布局的工程优先走本地工具链：不联网、几十秒出包。
         // 失败且是 Gradle 工程时才回退到 gradle（那条路径需要能访问 Google Maven）。
-        val hasAppLayout = File(root, "app/src/main/AndroidManifest.xml").exists()
-        if (hasAppLayout) {
-            // 只走本地链。之前「失败自动回退 Gradle」会把真正的失败原因埋进日志前面，
+        val layout = layoutOf(root, onOutput)
+        if (layout != null) {
+            // 有 java + 清单就走本地链。之前「失败自动回退 Gradle」会把真正的失败原因埋进日志前面，
             // 用户看到的是 gradle 的第二层错误，等于把根因藏了——这里不再回退。
-            return buildPlain(root, onOutput)
+            return buildPlain(root, onOutput, layout)
+        }
+        if (isGradleProject(root)) {
+            return BuildResult(
+                false, null,
+                "这是 Gradle 工程，但本机离线链只吃「java + AndroidManifest.xml」布局（app/src/main 或 src/main）。\n" +
+                    "Gradle 路径要联网访问 Google Maven（dl.google.com），你设备上已实测不通（`No address associated with hostname`），" +
+                    "所以不再浪费 6 秒去跑一个必死的构建。\n" +
+                    "两条可行路：① 让 Agent 把源码收敛成 src/main 布局；② 把源码推到 GitHub，用 CI（有网络）构建。",
+                ""
+            )
         }
         val missing = missingTools(root)
         if (missing.isNotEmpty()) {
@@ -171,12 +188,14 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
      * - 清单缺 uses-sdk → 补 minSdk 26 / targetSdk 28（targetSdk≤28 是 execve 私有 ELF 的前提）
      * 每处修复都写进日志，用户和 Agent 都能看到改了什么。
      */
-    private fun repairManifest(root: File, manifest: File, onOutput: ((String) -> Unit)?) {
+    private fun repairManifest(root: File, manifest: File, onOutput: ((String) -> Unit)?, layout: Layout? = null) {
         runCatching {
             var text = manifest.readText()
             val log = java.util.ArrayList<String>()
             if (!Regex("package\\s*=").containsMatchIn(text)) {
-                val java = File(root, "app/src/main/java").walkTopDown()
+                val java = (layout?.javaDirs ?: listOf(File(root, "app/src/main/java")))
+                    .asSequence().filter { it.isDirectory }
+                    .flatMap { it.walkTopDown() }
                     .firstOrNull { it.isFile && it.extension == "java" }
                 val pkg = java?.readText()?.let { Regex("package\\s+([A-Za-z0-9_.]+)").find(it)?.groupValues?.get(1) }
                 if (pkg != null) {
@@ -197,7 +216,7 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         }.onFailure { onOutput?.invoke("[自愈] 清单修复失败：" + it.message) }
     }
 
-    private suspend fun buildPlain(root: File, onOutput: ((String) -> Unit)?): BuildResult {
+    private suspend fun buildPlain(root: File, onOutput: ((String) -> Unit)?, layout: Layout? = null): BuildResult {
         val bt = latestBuildTools(sdk)
             ?: return BuildResult(false, null, "找不到 Android SDK build-tools。", "")
         val platform = File(sdk, "platforms").listFiles()
@@ -206,11 +225,10 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
             ?: return BuildResult(false, null, "找不到 Android SDK platforms（缺 android.jar）。", "")
         val aapt2 = aapt2Path()
             ?: return BuildResult(false, null, "找不到 aapt2。", "")
-        val manifest = File(root, "app/src/main/AndroidManifest.xml")
-        if (!manifest.exists()) {
-            return BuildResult(false, null, "项目里没有 app/src/main/AndroidManifest.xml，无法本地编译。", "")
-        }
-        repairManifest(root, manifest, onOutput)
+        val lay = layout ?: layoutOf(root)
+            ?: return BuildResult(false, null, "项目里找不到 AndroidManifest.xml + java 源码布局（app/src/main 或 src/main）。", "")
+        val manifest = lay.manifest
+        repairManifest(root, manifest, onOutput, lay)
         ensureKeystore()?.let { return BuildResult(false, null, it, "") }
 
         val jar = File(platform, "android.jar").path
@@ -238,13 +256,15 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
                 appendLine("BT=" + q(bt.path))
                 appendLine("rm -rf \$B")
                 appendLine("mkdir -p \$B/res \$B/gen \$B/classes \$B/dex")
-                appendLine("if [ -d \$P/app/src/main/res ]; then")
-                appendLine("  \$AAPT2 compile --dir \$P/app/src/main/res -o \$B/res")
-                appendLine("  \$AAPT2 link -o \$B/base.apk -I \$JAR --manifest \$P/app/src/main/AndroidManifest.xml -R \$B/res --java \$B/gen")
-                appendLine("else")
-                appendLine("  \$AAPT2 link -o \$B/base.apk -I \$JAR --manifest \$P/app/src/main/AndroidManifest.xml --java \$B/gen")
-                appendLine("fi")
-                appendLine("find \$P/app/src/main/java \$B/gen -name \"*.java\" > \$B/srcs")
+                val resDir = lay.res
+                val srcList = lay.javaDirs.joinToString(" ") { shQuote(it.path) }
+                if (resDir != null) {
+                    appendLine("\$AAPT2 compile --dir " + q(resDir.path) + " -o \$B/res")
+                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " -R \$B/res --java \$B/gen")
+                } else {
+                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " --java \$B/gen")
+                }
+                appendLine("find " + srcList + " \$B/gen -name \"*.java\" > \$B/srcs")
                 appendLine(q(javacBin) + " -source 8 -target 8 -bootclasspath \$JAR -d \$B/classes @\$B/srcs")
                 appendLine("find \$B/classes -name \"*.class\" > \$B/classes.lst")
                 appendLine(q(javaBin) + " -Xmx768m -cp \$BT/lib/d8.jar com.android.tools.r8.D8 --lib \$JAR --min-api 26 --output \$B/dex \$(cat \$B/classes.lst)")
@@ -370,4 +390,38 @@ object Installer {
         ctx.startActivity(i)
         return "已唤起系统安装器，请在弹窗中确认安装。"
     }
+}
+
+/** 顶层：给 AabBuilder / 项目页用的同一套布局探测（含缺清单自愈）。 */
+fun projectLayout(root: File, onOutput: ((String) -> Unit)? = null): Packager.Layout? {
+    val p = Packager.Layout::class
+    val base = listOf(File(root, "app/src/main"), File(root, "src/main")).firstOrNull { it.isDirectory } ?: return null
+    val java = File(base, "java").takeIf { it.isDirectory } ?: File(base, "kotlin").takeIf { it.isDirectory } ?: return null
+    var manifest = File(base, "AndroidManifest.xml")
+    if (!manifest.exists()) {
+        val srcs = java.walkTopDown().filter { it.isFile && it.extension == ".java" }.toList()
+        val pkg = srcs.firstNotNullOfOrNull { f ->
+            Regex("(?m)^\\s*package\\s+([A-Za-z0-9_.]+)").find(f.readText())?.groupValues?.get(1)
+        }
+        val act = srcs.firstOrNull { it.readText().contains("extends Activity") || it.readText().contains(": Activity") }
+        if (pkg == null || act == null) return null
+        val cls = pkg + "." + act.nameWithoutExtension
+        manifest.writeText(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+            "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"$pkg\">\n" +
+            "  <uses-sdk android:minSdkVersion=\"26\" android:targetSdkVersion=\"28\"/>\n" +
+            "  <application android:label=\"${root.name}\">\n" +
+            "    <activity android:name=\"$cls\" android:exported=\"true\">\n" +
+            "      <intent-filter>\n" +
+            "        <action android:name=\"android.intent.action.MAIN\"/>\n" +
+            "        <category android:name=\"android.intent.category.LAUNCHER\"/>\n" +
+            "      </intent-filter>\n" +
+            "    </activity>\n" +
+            "  </application>\n" +
+            "</manifest>\n"
+        )
+        onOutput?.invoke("清单缺失，已按源码生成最小清单：package=$pkg，Activity=$cls")
+    }
+    return Packager.Layout(manifest, listOf(java), File(base, "res").takeIf { it.isDirectory },
+        File(base, "assets").takeIf { it.isDirectory })
 }
