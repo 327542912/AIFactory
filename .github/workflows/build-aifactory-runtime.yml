@@ -216,6 +216,21 @@ jobs:
           sed -i 's|https://nano-editor.org/dist/latest/|https://ftp.gnu.org/gnu/nano/|' packages/nano/build.sh
           grep -n 'TERMUX_PKG_SRCURL=' packages/dos2unix/build.sh packages/nano/build.sh
 
+      - name: Patch apt-repo package sources
+        run: |
+          set -euo pipefail
+          cd termux-packages
+          # giflib: downloads.sourceforge.net/project/... 现在 404；短式 /giflib/ 返回 200，SHA256 逐字节一致
+          sed -i 's|downloads.sourceforge.net/project/giflib/|downloads.sourceforge.net/giflib/|' packages/giflib/build.sh
+          # git: mirrors.kernel.org 503，mirrors.edge.kernel.org 正常（同一个 tarball，SHA256 不变）
+          sed -i 's|https://mirrors.kernel.org/|https://mirrors.edge.kernel.org/|' packages/git/build.sh
+          # git 去掉 less 依赖：greenwoodsoftware.com 域名已不可解析；pager 是可选功能，不影响 clone/commit
+          sed -i 's|libiconv, less, openssl|libiconv, openssl|' packages/git/build.sh
+          # openjdk-21 去掉 alsa-plugins：否则要连带冷编 pulseaudio/libsndfile/flac/opus/vorbis
+          # 整条音频链（headless 开发工作台不需要 pulse 输出，alsa-lib 仍保留为 build 依赖）
+          sed -i 's|, alsa-plugins"|"|' packages/openjdk-21/build.sh
+          grep -n 'TERMUX_PKG_SRCURL=\|TERMUX_PKG_DEPENDS=' packages/giflib/build.sh packages/git/build.sh packages/openjdk-21/build.sh
+
       - name: Fix CMake policy minimum for old recipes
         run: |
           f=termux-packages/scripts/build/configure/termux_step_configure_cmake.sh
