@@ -178,8 +178,21 @@ class AgentEngine(private val ctx: Context) {
                     }
                     if (repeats >= 8) return "检测到连续 8 次完全相同的操作和结果，已暂停。请告诉我新的方向，或回复“继续”。"
                     if (repeats == 4) history.put(JSONObject().put("role", "user")
-                        .put("content", "系统提示：你已连续 4 次执行完全相同的操作并得到相同结果，请换一种思路（例如先读相关文件或日志）。"))
+                        .put("content", "系统提示：你已连续 4 次执行完全相同的操作并得到相同结果——这是死循环信号。立即换路径，不要再重复同一调用。可选路径：" +
+                            "① 先用 pipeline_status/read_log 看清失败在哪一步，而不是重跑；" +
+                            "② 环境问题用 run_shell 探测（ls/which/ldd/echo $?），缺包就换装法（自建 apt 源失败→手动搬 deb/改 rpath）；" +
+                            "③ 构建问题换工具链（gradle 失败→本地 aapt2 链；缺 android.jar→检查 sdk/platforms）；" +
+                            "④ 文档/报错含义不确定用 fetch_url 查官方文档；" +
+                            "⑤ 同一方法最多试两次，第三次必须改方案，并把根因用 remember 记下。"))
                     continue
+                }
+
+                // 模型想直接结束、但一次工具都没调用，且本轮没有任何构建记录：提示它先动手
+                if (buildOk == null && toolCalls == 0 && step == 1 && content.length > 60) {
+                    history.put(JSONObject().put("role", "assistant").put("content", content))
+                    history.put(JSONObject().put("role", "user").put("content",
+                        "【执行闸门】你还没有做任何实际动作。不要只给方案：先用 toolchain_status/pipeline_status 看清现场，" +
+                        "然后直接开始动手（写代码/跑命令/构建），失败就修，直到产出可安装的 APK 或明确写出阻塞证据。"))
                 }
 
                 val fenced = if (!nativeTools) FENCE.find(content) else null
