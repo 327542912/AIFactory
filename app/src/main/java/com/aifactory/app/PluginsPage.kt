@@ -156,7 +156,7 @@ fun PluginsPage() {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("安装输出", fontWeight = FontWeight.SemiBold, Modifier.weight(1f))
+                        Text("安装输出", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                         if (busy) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                     }
                     Text(log, fontSize = 11.sp, lineHeight = 15.sp, fontFamily = FontFamily.Monospace)
