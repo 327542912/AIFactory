@@ -94,6 +94,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         val home = File(files, "home")
         val ws = File(home, "projects").apply { mkdirs() }
         val tmp = File(prefix, "tmp").apply { mkdirs() }
+        runCatching { RuntimeRepair.ensureUsr(ctx) }
         val bash = File(prefix, "bin/bash")
         val linkTarget = try {
             if (java.nio.file.Files.isSymbolicLink(bash.toPath()))
@@ -153,7 +154,17 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     fun pasteFromClipboard() {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString()
-        if (!text.isNullOrEmpty()) send(text)
+        if (text.isNullOrEmpty()) return
+        send(text)
+    }
+
+    fun copySelection(): Boolean {
+        val v = view ?: return false
+        val text = v.getSelectedText() ?: return false
+        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("AIFactory", text))
+        v.stopTextSelectionMode()
+        return true
     }
 
     fun restart() {
@@ -169,7 +180,11 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     }
 
     // ---- TerminalSessionClient ----
-    override fun onTextChanged(changedSession: TerminalSession) {}
+    override fun onTextChanged(changedSession: TerminalSession) {
+        // 这是「屏幕该重画」的唯一信号：pty 回显、apt/gradle 输出都靠它触发 invalidate。
+        // 不要在这里碰 Compose 状态，onScreenUpdated 只是往渲染线程 post 一次重绘。
+        view?.onScreenUpdated()
+    }
     override fun onTitleChanged(changedSession: TerminalSession) {
         val t = changedSession.title
         if (!t.isNullOrBlank()) currentTitle = t
@@ -205,8 +220,11 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         return 1.0f
     }
     override fun onSingleTapUp(e: MotionEvent) {
+        if (isTerminalSelecting()) return
         showKeyboard()
     }
+
+    private fun isTerminalSelecting(): Boolean = view?.isSelectingText() == true
     override fun shouldBackButtonBeMappedToEscape(): Boolean = true
     override fun shouldEnforceCharBasedInput(): Boolean = true
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = true
@@ -214,7 +232,8 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     override fun copyModeChanged(copyMode: Boolean) {}
     override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession): Boolean = false
     override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean = false
-    override fun onLongPress(event: MotionEvent): Boolean = true
+    // 返回 false 让 TerminalView 自己进入文本选择模式（长按出光标把手 + 复制/粘贴菜单）
+    override fun onLongPress(event: MotionEvent): Boolean = false
     override fun readControlKey(): Boolean = ctrlDown
     override fun readAltKey(): Boolean = altDown
     override fun readShiftKey(): Boolean = false
