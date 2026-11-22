@@ -239,7 +239,7 @@ class AgentEngine(private val ctx: Context) {
             runCatching {
                 val z = java.util.zip.ZipFile(f)
                 val names = z.entries().toList().map { it.name }
-                val dex = names.filter { it.matches(Regex("classes[0-9]*\\\\.dex")) }
+                val dex = names.filter { it.startsWith("classes") && it.endsWith(".dex") }
                 appendLine("文件 " + names.size + " 个；dex：" + dex.joinToString(","))
                 val top = names.filter { !it.startsWith("META-INF") }.take(60)
                 appendLine("清单：" + top.joinToString(", "))
