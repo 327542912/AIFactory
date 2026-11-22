@@ -432,7 +432,12 @@ class AgentEngine(private val ctx: Context) {
                         r.cancelled -> "已取消"
                         else -> "退出码 ${r.exitCode}"
                     }
-                    "$status\n" + tailText(r.output.ifBlank { "(没有输出)" }, 10000)
+                    // 明确告知在哪执行：装好 Runtime 是本机 bash；没装会退化成系统 /system/bin/sh（能力差很多）
+                    val head = if (rt.isInstalled())
+                        "【执行环境】本机 Runtime（bash @" + RuntimePaths.prefix(ctx).path + "，工作目录 " + cwd.path + "）"
+                    else
+                        "【执行环境】系统 sh（Runtime 未安装：命令跑在 /system/bin/sh，没有 bash/coreutils/java；本次结果不代表完整 Runtime）"
+                    head + "\n$status\n" + tailText(r.output.ifBlank { "(没有输出)" }, 10000)
                 }
             }
             "read_file" -> {
@@ -502,8 +507,9 @@ class AgentEngine(private val ctx: Context) {
                 val release = a.optString("release").equals("true", ignoreCase = true)
                 // 排进全局串行队列：避免与排队中的构build/apt 抢同一目录与进程
                 val r = Pipeline.exclusive { packager.build(dir, release) }
-                if (r.ok) "${r.message}\nAPK 路径：${r.apk?.path}"
-                else "${r.message}\n--- 构建日志（末尾）---\n${tailText(r.log, 7000)}"
+                val envHead = if (rt.isInstalled()) "【构建环境】本机工具链（离线五步链）" else "【构建环境】Runtime 未安装，构建会失败"
+                if (r.ok) "$envHead\n${r.message}\nAPK 路径：${r.apk?.path}"
+                else "$envHead\n${r.message}\n--- 构建日志（末尾）---\n${tailText(r.log, 7000)}"
             }
             "install_apk" -> {
                 val p = a.getString("path")

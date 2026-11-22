@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -193,6 +194,12 @@ private fun ChatPage(
     var showHistory by remember { mutableStateOf(false) }
     val busy = ChatRunner.busy
     val sessionList = ChatRunner.sessions
+    val rtInfo = remember { RuntimeEngine(ctx.applicationContext) }
+    val listState = rememberLazyListState()
+    // 进页面、来新消息、Agent 工作状态变化都滚到底：否则切回来停在旧位置，要手动往下翻
+    LaunchedEffect(messages.size, busy, ChatRunner.currentId) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -201,6 +208,11 @@ private fun ChatPage(
             Column(Modifier.weight(1f)) {
                 Text("AI 工程师", fontWeight = FontWeight.SemiBold)
                 Text(if (apiKey.isBlank()) "模型尚未配置" else "模型：$model", color = Muted, fontSize = 11.sp)
+                Text(
+                    if (rtInfo.isInstalled()) "Runtime：本机 bash · " + RuntimePaths.prefix(ctx).path
+                    else "Runtime 未安装：命令会落到系统 sh（能力不完整）",
+                    color = if (rtInfo.isInstalled()) Muted else MaterialTheme.colorScheme.error, fontSize = 10.sp
+                )
             }
             TextButton(onClick = { ChatRunner.newChat(ctx.applicationContext) }) { Text("＋ 新对话") }
             TextButton(onClick = { showHistory = !showHistory }) { Text("历史") }
@@ -237,7 +249,7 @@ private fun ChatPage(
                 }
             }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp), contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp), contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 Text("工程流程", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
