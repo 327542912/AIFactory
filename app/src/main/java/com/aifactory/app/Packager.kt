@@ -165,6 +165,38 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
      * 不依赖 Gradle、不依赖网络的构建：aapt2 → javac → D8 → 打包 → zipalign → apksigner。
      * 生成的 build.sh 与真机实测通过的那条链一致，全部用手机本地二进制。
      */
+    /**
+     * 构建前把工程侧的硬性缺陷修掉，而不是让构建失败：
+     * - 清单缺 package 属性（AGP 用 namespace，aapt2 只认 package）→ 从 java 源码的 package 语句补
+     * - 清单缺 uses-sdk → 补 minSdk 26 / targetSdk 28（targetSdk≤28 是 execve 私有 ELF 的前提）
+     * 每处修复都写进日志，用户和 Agent 都能看到改了什么。
+     */
+    private fun repairManifest(root: File, manifest: File, onOutput: ((String) -> Unit)?) {
+        runCatching {
+            var text = manifest.readText()
+            val log = java.util.ArrayList<String>()
+            if (!Regex("package\\s*=").containsMatchIn(text)) {
+                val java = File(root, "app/src/main/java").walkTopDown()
+                    .firstOrNull { it.isFile && it.extension == "java" }
+                val pkg = java?.readText()?.let { Regex("package\\s+([A-Za-z0-9_.]+)").find(it)?.groupValues?.get(1) }
+                if (pkg != null) {
+                    text = text.replaceFirst(Regex("<manifest\\b"), "<manifest package=\"" + pkg + "\"")
+                    log += "补 package=\"" + pkg + "\""
+                }
+            }
+            if (!text.contains("uses-sdk")) {
+                val inject = "<uses-sdk android:minSdkVersion=\"26\" android:targetSdkVersion=\"28\" />"
+                text = if (text.contains("</manifest>")) text.replace("</manifest>", "    " + inject + "\n</manifest>")
+                else text.replace("</application>", "</application>\n" + inject)
+                log += "补 uses-sdk(min26/target28)"
+            }
+            if (log.isNotEmpty()) {
+                manifest.writeText(text)
+                log.forEach { onOutput?.invoke("[自愈] 清单" + it) }
+            }
+        }.onFailure { onOutput?.invoke("[自愈] 清单修复失败：" + it.message) }
+    }
+
     private suspend fun buildPlain(root: File, onOutput: ((String) -> Unit)?): BuildResult {
         val bt = latestBuildTools(sdk)
             ?: return BuildResult(false, null, "找不到 Android SDK build-tools。", "")
@@ -178,6 +210,7 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         if (!manifest.exists()) {
             return BuildResult(false, null, "项目里没有 app/src/main/AndroidManifest.xml，无法本地编译。", "")
         }
+        repairManifest(root, manifest, onOutput)
         ensureKeystore()?.let { return BuildResult(false, null, it, "") }
 
         val jar = File(platform, "android.jar").path

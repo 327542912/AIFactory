@@ -126,6 +126,8 @@ class AgentEngine(private val ctx: Context) {
         history.put(JSONObject().put("role", "user").put("content", userText))
         val limit = cfg.maxSteps.coerceAtLeast(1)
         var steps = 0; var toolCalls = 0; var requests = 0
+        var buildOk: Boolean? = null   // 交付闸门：最近一次构建是否通过
+        var forced = 0
         var lastSig = ""
         var repeats = 0
         // 连续出现完全相同的调用和结果 = 卡住了：4 次提醒换思路，8 次暂停
@@ -166,6 +168,7 @@ class AgentEngine(private val ctx: Context) {
                         emit("🔧 $name ${briefArgs(args)}")
                         toolCalls++
                         val result = runTool(name, args)
+                        if (name == "build_apk") buildOk = !(result.startsWith("❌") || result.contains("构建失败") || result.contains("失败："))
                         emit("↳ ${tailText(result, 500)}")
                         history.put(
                             JSONObject().put("role", "tool").put("tool_call_id", call.getString("id"))
@@ -190,7 +193,8 @@ class AgentEngine(private val ctx: Context) {
                         val args = parseArgs(j.opt("arguments"))
                         emit("🔧 $name ${briefArgs(args)}")
                         toolCalls++
-                        runTool(name, args)
+                        val result = runTool(name, args)
+                        if (name == "build_apk") buildOk = !(result.startsWith("❌") || result.contains("构建失败") || result.contains("失败："))
                     } catch (e: Exception) {
                         "工具调用格式错误：${e.message}"
                     }
@@ -201,6 +205,15 @@ class AgentEngine(private val ctx: Context) {
                     continue
                 }
 
+                // 交付闸门：构建/自检没通过时不许收工，强制回去修（最多两次），避免“报错就停”
+                if (buildOk == false && forced < 2) {
+                    forced++
+                    emit("构建未通过（" + forced + "/2 次自动返工）：继续定位并修复，直到自检全绿。")
+                    history.put(JSONObject().put("role", "user").put("content",
+                        "【交付闸门】上一次 build_apk 结果是失败。不要结束回答：先用 pipeline_status / read_log 定位失败的那一步，" +
+                        "改代码或改环境后重新 build_apk，直到构建成功且自检全部 [通过] 再汇报。若确实无法修复，明确写出阻塞点、证据和你建议的下一步。"))
+                    continue
+                }
                 history.put(JSONObject().put("role", "assistant").put("content", content))
                 return content.ifBlank { "（模型没有返回内容）" }
             }
