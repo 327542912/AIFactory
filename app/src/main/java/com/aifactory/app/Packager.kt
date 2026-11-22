@@ -106,7 +106,14 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
     ): BuildResult {
         if (!projectDir.isDirectory) return BuildResult(false, null, "项目目录不存在：${projectDir.path}", "")
         val root = findProjectRoot(projectDir)
-        if (!isGradleProject(root)) return buildPlain(root, onOutput)
+        // 有标准 app/ 布局的工程优先走本地工具链：不联网、几十秒出包。
+        // 失败且是 Gradle 工程时才回退到 gradle（那条路径需要能访问 Google Maven）。
+        val hasAppLayout = File(root, "app/src/main/AndroidManifest.xml").exists()
+        if (hasAppLayout) {
+            val plain = buildPlain(root, onOutput)
+            if (plain.ok || !isGradleProject(root)) return plain
+            onOutput?.invoke("本地工具链失败，回退 Gradle：\n" + tailText(plain.log, 2000))
+        }
         val missing = missingTools(root)
         if (missing.isNotEmpty()) {
             return BuildResult(

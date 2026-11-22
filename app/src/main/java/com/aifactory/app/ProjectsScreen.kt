@@ -125,6 +125,10 @@ fun ProjectsScreen() {
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(enabled = selected != null && !busy, onClick = { runBuild(false) }) { Text("构建 Debug") }
+            Button(enabled = selected != null && !busy, onClick = {
+                val name = selected ?: return@Button
+                Pipeline.buildProject(ctx, pk, File(rt.workspace, name), false, install = true)
+            }) { Text("构建并安装") }
             Button(enabled = selected != null && !busy, onClick = { runBuild(true) }) { Text("构建 Release（签名）") }
             if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
         }

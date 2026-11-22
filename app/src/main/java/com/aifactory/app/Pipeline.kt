@@ -90,18 +90,19 @@ internal object Pipeline {
     }
 
     /** 项目构建的标准流水线：工具链 → gradle → 产物落 outputs。 */
-    fun buildProject(ctx: Context, pk: Packager, dir: File, release: Boolean) {
+    fun buildProject(ctx: Context, pk: Packager, dir: File, release: Boolean, install: Boolean = false) {
         submit(
             ctx,
             (if (release) "Release 构建 " else "Debug 构建 ") + dir.name,
-            listOf("准备工具链", "执行 Gradle", "收集产物")
+            listOf("准备工具链", "编译与打包", "签名", "收集产物")
         ) { report ->
             KeepAliveService.start(ctx)
             try {
                 val res = pk.build(dir, release) { chunk -> report(chunk) }
                 if (res.ok) {
                     main.post { lastApk = res.apk }
-                    "构建成功：" + (res.apk?.name ?: "?") + "（" + ((res.apk?.length() ?: 0L) / 1024) + " KB）"
+                    val msg = "构建成功：" + (res.apk?.name ?: "?") + "（" + ((res.apk?.length() ?: 0L) / 1024) + " KB）"
+                    if (install && res.apk != null) msg + "\n" + Installer.install(ctx, res.apk) else msg
                 } else {
                     res.message + "\n--- 日志末尾 ---\n" + tailText(res.log, 4000)
                 }
