@@ -49,12 +49,12 @@ fun PluginsPage() {
             PluginSpec(
                 "Make / 构建工具",
                 listOf("make"),
-                "原生构建用；编 Android native 还需要 NDK 与 sysroot。",
-                { p -> File(p, "bin/cmake").exists() }
+                "GNU make 4.4.1，Makefile/原生构建用。CMake 与 NDK 不在自建源里，编 native 需另备。",
+                { p -> File(p, "bin/make").exists() }
             ),
             PluginSpec(
                 "Git Integration",
-                listOf("git", "openssh"),
+                listOf("git"),
                 "装完可直接 clone；认证用 ssh key 或 token。",
                 { p -> File(p, "bin/git").exists() }
             ),
