@@ -19,6 +19,24 @@ object LocalRepo {
 
     fun uri(ctx: Context): String = "file://" + dir(ctx).path + "/"
 
+    /** 把 APK 内置的库包（libandroid-shmem/spawn、libjpeg-turbo、littlecms）放到本地仓库。
+     *  这四个 .so 是 openjdk-21 的 Depends，bootstrap 里没有；随包带走就不用再联网下 548 KB。 */
+    fun stageBundled(ctx: Context): Int {
+        val d = dir(ctx)
+        val target = d.listFiles()?.map { it.name }?.toSet() ?: emptySet()
+        var copied = 0
+        runCatching {
+            val names = ctx.assets.list("local-debs") ?: emptyArray()
+            for (n in names) {
+                if (!n.endsWith(".deb") || n in target) continue
+                val out = File(d, n)
+                ctx.assets.open("local-debs/" + n).use { ins -> out.outputStream().use { ins.copyTo(it, 1 shl 16) } }
+                copied++
+            }
+        }
+        return copied
+    }
+
     private fun field(rt: RuntimeEngine, dir: File, deb: File, name: String): String {
         // dpkg-deb -f 直接读 control，不需要我们自己解 ar/zstd
         val r = runBlockingShort(rt, "dpkg-deb -f " + shQuote(deb.name) + " " + name + " 2>/dev/null", dir)

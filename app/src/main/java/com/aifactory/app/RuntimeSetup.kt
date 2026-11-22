@@ -57,6 +57,7 @@ fun RuntimeSetupCard() {
 
     val debPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (!uris.isNullOrEmpty()) SetupRunner.run(ctx) {
+            LocalRepo.stageBundled(ctx)
             val repo = LocalRepo.dir(ctx)
             val saved = ArrayList<File>()
             withContext(Dispatchers.IO) {
@@ -86,8 +87,15 @@ fun RuntimeSetupCard() {
             } else {
                 SetupRunner.report("apt 未能解析依赖，改用 dpkg 直装（文件会装进去，缺依赖的会在上面留 ✗）…")
                 val fb = rt.run("dpkg -i --force-depends *.deb 2>&1 | tail -25", repo, 3600) { SetupRunner.report(tailText(it, 1400)) }
-                SetupRunner.report((if (fb.ok) "dpkg 直装结束（退出 0）。" else "dpkg 直装退出码 " + fb.exitCode + "。") + "\n" + tailText(fb.output, 900))
+                SetupRunner.report((if (fb.ok) "dpkg 直装结束（退出 0）。" else "dpkg 直装退出码 " + fb.exitCode + "。") + "\n" + tailText(fb.output, 700))
             }
+            // 装完自检：java 到底能不能跑，缺的是哪个 .so
+            val probe = rt.run(
+                "P=\$PREFIX; if [ -x \"\$P/bin/java\" ]; then \"\$P/bin/java\" -version 2>&1 | head -8; " +
+                    "else echo 'bin/java 不存在（postinst 未执行成功）'; fi; echo ---; dpkg -l 2>/dev/null | grep -v '^ii' | tail -12",
+                repo, 300
+            )
+            SetupRunner.report("安装自检：\n" + tailText(probe.output, 1400))
         }
     }
 

@@ -149,6 +149,7 @@ internal object PluginRunner {
                 val prefix = RuntimePaths.prefix(ctx)
                 // 若设备上有本地 deb 仓库，先重建索引并挂上 file:// 源，apt 不再完全依赖网络
                 var pre = ""
+                LocalRepo.stageBundled(ctx)
                 if (LocalRepo.dir(ctx).listFiles { f -> f.isFile && f.name.endsWith(".deb") }?.isNotEmpty() == true) {
                     LocalRepo.rebuild(ctx, rt)
                     LocalRepo.ensureSource(ctx)
