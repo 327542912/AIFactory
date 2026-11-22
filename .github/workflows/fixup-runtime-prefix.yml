@@ -1,0 +1,55 @@
+name: Fix runtime prefix leftovers
+
+# 用途: 对已发布的 bootstrap-aarch64.zip 做一次文本前缀归一化，不需要重编。
+# 只改 shell 脚本里的 /data/data/com.termux，ELF 一律不动。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fixup-prefix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout AIFactory
+        uses: actions/checkout@v4
+
+      - name: Download published bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download runtime-latest --repo "$GITHUB_REPOSITORY" \
+            -p 'bootstrap-aarch64.zip' -O bootstrap-aarch64.zip --clobber
+          ls -lh bootstrap-aarch64.zip
+          sha256sum bootstrap-aarch64.zip
+
+      - name: Normalize prefix
+        run: bash .github/scripts/normalize-bootstrap-prefix.sh bootstrap-aarch64.zip
+
+      - name: Verify
+        run: |
+          set -e
+          unzip -tq bootstrap-aarch64.zip
+          rm -rf chk && mkdir chk && unzip -q bootstrap-aarch64.zip -d chk
+          if grep -rla 'data/data/com\.termux' chk; then
+            echo "::error::旧前缀仍然存在"; exit 1
+          fi
+          grep -q 'com.aifactory.app/files/usr/bin/termux-setup-package-manager' chk/bin/pkg
+          grep -q '^#!/data/data/com.aifactory.app/files/usr/bin/bash' chk/var/lib/dpkg/info/termux-tools.preinst
+          echo "prefix checks passed"
+          rm -rf chk
+
+      - name: Publish fixed bootstrap
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum bootstrap-aarch64.zip | cut -d' ' -f1 > bootstrap-aarch64.zip.sha256
+          gh release upload runtime-latest --repo "$GITHUB_REPOSITORY" --clobber \
+            bootstrap-aarch64.zip bootstrap-aarch64.zip.sha256
+          cat bootstrap-aarch64.zip.sha256
