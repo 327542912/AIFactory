@@ -210,7 +210,8 @@ private fun ChatPage(
                 Text("AI 工程师", fontWeight = FontWeight.SemiBold, maxLines = 1)
                 Text(
                     (if (apiKey.isBlank()) "模型未配置" else "$model") +
-                        (if (rtInfo.isInstalled()) " · Runtime 本机 ✓" else " · Runtime 未装"),
+                        (if (rtInfo.isInstalled()) " · Runtime 本机 ✓" else " · Runtime 未装") +
+                        (WorkState.currentProject?.let { " · 项目 " + it } ?: " · 未选项目"),
                     color = if (rtInfo.isInstalled()) Muted else MaterialTheme.colorScheme.error,
                     fontSize = 11.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                 )

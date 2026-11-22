@@ -319,8 +319,12 @@ class AgentEngine(private val ctx: Context) {
         if (!jar.exists()) {
             val zipPath = File(workspace, ".dl/jadx.zip")
             zipPath.parentFile?.mkdirs()
-            val dl = downloadUrl("https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip", zipPath.path, 80)
-            if (!dl.startsWith("已下载")) return@withContext "没有 jadx，自动下载失败：" + dl
+            val dl = downloadUrl("https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip", zipPath.path, 200)
+            if (!dl.startsWith("已下载")) {
+                return@withContext "没有 jadx，自动下载失败：" + dl +
+                    "\n建议：不要在手机上反编译大 APK，直接改你自己的工程源码（当前项目 " + (WorkState.currentProject ?: "未选择") + "）；" +
+                    "真要看反编译结果，把 jadx jar 手动放进 .aifactory/tools/ 再调本工具。"
+            }
             runCatching {
                 java.util.zip.ZipFile(zipPath).use { z ->
                     val jars = z.entries().toList().filter { e -> !e.isDirectory && e.name.startsWith("lib/") && e.name.endsWith(".jar") }
@@ -429,7 +433,11 @@ class AgentEngine(private val ctx: Context) {
     // ---------- 工具实现 ----------
 
     private fun resolve(p: String): File {
-        val f = if (p.startsWith("/")) File(p) else File(workspace, p)
+        // 相对路径优先落在「当前项目」里：模型写 app/src/main/... 时是想改当前工程，
+        // 不是想在 workspace 根下再造一个 app/（之前就是这么把文件写歪的）
+        val cur = WorkState.currentProject
+        val base = if (!p.startsWith("/") && cur != null && cur.isNotBlank()) File(workspace, cur) else workspace
+        val f = if (p.startsWith("/")) File(p) else File(base, p)
         val c = f.canonicalFile
         val root = workspace.canonicalFile
         require(c.path == root.path || c.path.startsWith(root.path + File.separator)) { "路径超出工作区：$p" }
