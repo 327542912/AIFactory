@@ -19,6 +19,7 @@
 | **仓库内文件**（手机点开即下） | [`apk/AIFactory-latest.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-latest.apk) | 固定路径，每次构建覆盖更新，链接永不失效 |
 | 带版本号的文件 | [`apk/AIFactory-0.2.2-debug.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-0.2.2-debug.apk) | 存档用 |
 | Release 资产 | [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | 与上面同一份文件，附 `.sha256` |
+| **Android SDK（arm64）** | [`sdk-latest/android-sdk-aarch64.zip`](https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip) | 89 MB，内含 `platforms/android-34` + `build-tools/34.0.0`，aapt2/zipalign/aapt/aidl 为 aarch64 静态二进制；App 内默认地址已指向它 |
 
 > debug 签名，仅供自用；同包名同签名可直接覆盖安装，`/data/data/com.aifactory.app` 里的 Runtime 不会丢。
 
@@ -86,7 +87,13 @@ pkg install openjdk-21 gradle git apksigner zip unzip
 
 ### 5. 装 Android SDK
 
-第 3 张卡导入 SDK zip（需含 `platforms/android-34` 与 `build-tools/`）。**注意**：官方 `build-tools` 里的 `aapt2` 是 x86_64 ELF，在 arm64 手机上跑不了，必须换 aarch64 静态版（见[已知限制](#已知限制)）。
+第 3 张卡的地址已默认填好，直接点「下载并安装」：
+
+```text
+https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip
+```
+
+包内是 `platforms/android-34`（含 `android.jar`）与 `build-tools/34.0.0`。**关键点**：官方 `build-tools` 里的 `aapt2` / `zipalign` / `aapt` / `aidl` 是 x86_64 ELF，在 arm64 手机上无法执行；这个包里换成了 aarch64 静态二进制，`lib/d8.jar`、`lib/apksigner.jar` 等 jar 与脚本仍为官方原样。
 
 ### 6. 在手机上编 APK
 
@@ -181,7 +188,8 @@ app/src/main/java/com/aifactory/app/
 |---|---|---|
 | [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,610,948 B，sha256 `1738bf87…0d750d` |
 | [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | ~200 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源 |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.2-debug.apk` + `.sha256` | 16,491,168 B |
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.2-debug.apk` + `.sha256` | 16,507,552 B |
+| [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 89,330,838 B，sha256 `69907679…83391` |
 
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
 
@@ -191,8 +199,8 @@ app/src/main/java/com/aifactory/app/
 
 | 问题 | 现状 / 原因 | 出路 |
 |---|---|---|
-| `aapt2` 是 ✗ | 官方 `build-tools` 里的 `aapt2` 为 x86_64 ELF，arm64 上无法执行 | 换 aarch64 静态版（`lzhiyong/android-sdk-tools` 35.0.2），并配 `android.aapt2FromMavenOverride` |
-| Android SDK 从未打包 | App 只支持导入 zip，没有内置下载源 | 需要自建 `sdk-aarch64.zip` 并发布 |
+| ~~`aapt2` 是 ✗~~ 已解决 | 官方 `build-tools` 的 `aapt2` 是 x86_64 ELF | 已换成 `lzhiyong/android-sdk-tools` 35.0.2 的 aarch64 静态版，随 `sdk-latest` 分发 |
+| ~~Android SDK 未打包~~ 已解决 | — | 已发布 `sdk-latest/android-sdk-aarch64.zip`，App 默认地址指向它 |
 | `termux-setup-storage` 失效 | `bin/am` 调的是 `com.termux.termuxam.Am` 类名，包名不同 | 自造 `am` 桥接，或改用 `curl` 直接拉文件 |
 | 官方源不可用 | 官方包前缀是 `com.termux`，装进来路径全错 | 必须用自建 `runtime-repo` |
 | 每轮冷编 36+ 分钟 | `~/.termux-build` 不在挂载目录内 | 把缓存目录也挂出来 / 用自托管 runner |
