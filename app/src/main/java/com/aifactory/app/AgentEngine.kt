@@ -193,8 +193,9 @@ class AgentEngine(private val ctx: Context) {
                         val args = parseArgs(j.opt("arguments"))
                         emit("🔧 $name ${briefArgs(args)}")
                         toolCalls++
-                        val result = runTool(name, args)
-                        if (name == "build_apk") buildOk = !(result.startsWith("❌") || result.contains("构建失败") || result.contains("失败："))
+                        val r = runTool(name, args)
+                        if (name == "build_apk") buildOk = !(r.startsWith("❌") || r.contains("构建失败") || r.contains("失败："))
+                        r
                     } catch (e: Exception) {
                         "工具调用格式错误：${e.message}"
                     }
