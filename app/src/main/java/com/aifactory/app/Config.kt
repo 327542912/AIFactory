@@ -67,8 +67,9 @@ class AppConfig(context: Context) {
         get() = get("repo_url", "https://github.com/327542912/AIFactory/releases/download/runtime-repo/")
         set(v) = put("repo_url", v)
 
+    /** Android SDK（aarch64 静态 aapt2 + platforms/android-34 + build-tools/34.0.0）。 */
     var sdkUrl: String
-        get() = get("sdk_url", "")
+        get() = get("sdk_url", "https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip")
         set(v) = put("sdk_url", v)
 
     /** 发布签名密钥口令：首次使用时随机生成，只保存在应用私有存储。 */

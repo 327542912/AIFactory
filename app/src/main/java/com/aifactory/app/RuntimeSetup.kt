@@ -108,8 +108,8 @@ fun RuntimeSetupCard() {
                 OutlinedButton(enabled = !busy, onClick = { sdkPicker.launch(arrayOf("*/*")) }) { Text("选择本地 zip") }
             }
             Text(
-                "Runtime 由本仓库的 GitHub Actions 构建（包名 com.aifactory.app，内置 JDK/Gradle/aapt2/apksigner）。" +
-                    "SDK 可把现有 android-sdk 目录打成 zip 后选择本地文件导入。",
+                "Runtime 与 SDK 都由本仓库的 GitHub Actions 构建（包名 com.aifactory.app）。SDK 内含 platforms/android-34 与 build-tools/34.0.0，" +
+                    "其中 aapt2 / zipalign / aapt / aidl 是编译好的 aarch64 静态二进制（官方包是 x86_64，手机上跑不起来）。地址已默认填好，直接点「下载并安装」。",
                 fontSize = 11.sp, lineHeight = 16.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
             )
