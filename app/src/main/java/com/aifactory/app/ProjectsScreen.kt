@@ -68,12 +68,13 @@ fun ProjectsScreen() {
     val rt = remember { RuntimeEngine(ctx) }
     val pk = remember { Packager(ctx, rt) }
     val scope = rememberCoroutineScope()
+    var projects by remember { mutableStateOf(listProjects(rt)) }
+    var selected by remember { mutableStateOf<String?>(null) }
     // 只有一个项目时直接选中并登记为“当前项目”，避免 Agent 反问“在哪个项目里改”
     LaunchedEffect(Unit) {
         if (projects.size == 1) { selected = projects[0]; WorkState.currentProject = projects[0] }
     }
-    var projects by remember { mutableStateOf(listProjects(rt)) }
-    var selected by remember { mutableStateOf<String?>(null) }
+
     // 新建项目向导：方向 → 名字 → 需求 → PRD 预览 → 确认创建
     var showNew by remember { mutableStateOf(false) }
     var kind by remember { mutableStateOf(ProjectScaffold.Kind.APP) }
