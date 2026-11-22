@@ -105,8 +105,13 @@ object ArchiveInstaller {
 
         val old = File(base, "usr-old")
         rmrf(old)
-        if (prefix.exists() && !prefix.renameTo(old)) throw IOException("无法替换旧 Runtime。")
-        if (!staging.renameTo(prefix)) throw IOException("无法启用新 Runtime。")
+        val hadOld = prefix.exists()
+        if (hadOld && !prefix.renameTo(old)) throw IOException("无法替换旧 Runtime。")
+        if (!staging.renameTo(prefix)) {
+            // 回滚：宁可留在旧 Runtime，也不能让 usr 树消失（bash 缺失后终端会完全不可用）
+            if (hadOld && !prefix.exists()) old.renameTo(prefix)
+            throw IOException("无法启用新 Runtime，已回滚到原 Runtime。")
+        }
         rmrf(old)
 
         RuntimePaths.home(ctx).mkdirs()
