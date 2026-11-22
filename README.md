@@ -17,11 +17,22 @@
 | 渠道 | 地址 | 备注 |
 |---|---|---|
 | **仓库内文件**（手机点开即下） | [`apk/AIFactory-latest.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-latest.apk) | 固定路径，每次构建覆盖更新，链接永不失效 |
-| 带版本号的文件 | [`apk/AIFactory-0.2.2-debug.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-0.2.2-debug.apk) | 存档用 |
+| 带版本号的文件 | [`apk/AIFactory-0.2.3-debug.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-0.2.3-debug.apk) | 存档用 |
 | Release 资产 | [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | 与上面同一份文件，附 `.sha256` |
 | **Android SDK（arm64）** | [`sdk-latest/android-sdk-aarch64.zip`](https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip) | 89 MB，内含 `platforms/android-34` + `build-tools/34.0.0`，aapt2/zipalign/aapt/aidl 为 aarch64 静态二进制；App 内默认地址已指向它 |
 
 > debug 签名，仅供自用；同包名同签名可直接覆盖安装，`/data/data/com.aifactory.app` 里的 Runtime 不会丢。
+
+## 升级与数据保留
+
+| 升级对象 | 怎么做 | 数据 |
+|---|---|---|
+| App（APK） | 直接覆盖安装。自 0.2.3 起 CI 使用固定 keystore（`keystore/aifactory-debug.jks`，证书 SHA-256 `05:FC:56:5E:…:FF:0B`），签名终身一致 | `/data/data/com.aifactory.app` 全部保留（Runtime、SDK、项目、配置） |
+| Runtime（apt 包） | 终端里 `apt update && apt upgrade` | 只替换对应文件，`/data/data/.../files/home` 里的项目不受影响 |
+| Runtime（bootstrap zip） | 重装 zip = **整目录替换**：`files/usr` 先改名为 `usr-old` 再删除 | 已用 apt 装的包会全部消失，等于回到出厂状态 |
+| Android SDK | 重新导入 zip 会 `rm -rf` 旧 SDK 目录再替换 | 只影响 SDK 本身 |
+
+> 0.2.2 及更早的包每次构建签名随机（实测 `d843c69d…` 与 `fbacebdadd…`），互相覆盖安装会失败、只能卸载，因此从 0.2.2 升到 0.2.3 **需要卸载一次**；从 0.2.3 起不再需要。
 
 ---
 
@@ -34,7 +45,7 @@
 | 项 | 值 |
 |---|---|
 | 应用包名 / applicationId | `com.aifactory.app` |
-| 当前版本 | `0.2.2`（versionCode 5） |
+| 当前版本 | `0.2.3`（versionCode 6） |
 | `targetSdk` | **28**（硬性上限，见下） |
 | `minSdk` / `compileSdk` | 26 / 34 |
 | Runtime 前缀 | `/data/data/com.aifactory.app/files/usr` |
@@ -55,10 +66,10 @@ proot 靠 `ptrace` 拦截每个系统调用做路径重写，代价是：每次�
 
 ### 1. 安装 App
 
-从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 下载 `AIFactory-0.2.2-debug.apk`（debug 签名，仅供自用）。
+从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 下载 `AIFactory-0.2.3-debug.apk`（debug 签名，仅供自用）。
 
 ```text
-https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-0.2.2-debug.apk
+https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-0.2.3-debug.apk
 ```
 
 ### 2. 安装 Runtime
@@ -188,7 +199,7 @@ app/src/main/java/com/aifactory/app/
 |---|---|---|
 | [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,610,948 B，sha256 `1738bf87…0d750d` |
 | [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | ~200 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源 |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.2-debug.apk` + `.sha256` | 16,507,552 B |
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.3-debug.apk` + `.sha256` | 16,507,552 B |
 | [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 89,330,838 B，sha256 `69907679…83391` |
 
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
