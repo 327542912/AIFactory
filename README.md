@@ -23,7 +23,7 @@
 | 项 | 值 |
 |---|---|
 | 应用包名 / applicationId | `com.aifactory.app` |
-| 当前版本 | `0.2.9`（versionCode 12） |
+| 当前版本 | `0.2.10`（versionCode 13） |
 | `targetSdk` | **28**（硬性上限，见下） |
 | `minSdk` / `compileSdk` | 26 / 34 |
 | Runtime 前缀 | `/data/data/com.aifactory.app/files/usr` |
@@ -52,7 +52,7 @@ https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-la
 
 **覆盖安装，不要卸载。** 卸载会删掉 `/data/data/com.aifactory.app/files`，Runtime 和 SDK 全要重来。
 签名从 0.2.3 起固定为同一张证书（SHA-256 `05fc565e9bc34b4b69806123a993fd12bbd03b42ddde56238090e7820c2fff0b`），
-2.3 → 2.9 全部能原地升级。
+2.3 → 2.10 全部能原地升级。
 
 ### 2. 安装 Runtime
 
@@ -91,6 +91,7 @@ apt 会报 `File has unexpected size (40057 != 40531). Mirror sync in progress?`
 
 - `isatty()` 为真 → apt 的进度、gradle 的彩色与计时、`vim` / `top` / `nano` / `less` 全部正常
 - 键盘栏：ESC / TAB / CTRL / ALT / 方向键 / HOME / END / 粘贴，CTRL、ALT 点一下锁定
+- 会话常驻：切到别的页再回来不清屏、bash 不被杀（离开只解绑视图）
 - 双指缩放改字号，同时通过 `setPtyWindowSize` 给 PTY 发 `SIGWINCH`，`nano` 和 gradle rich console 的布局会跟着重排
 - 返回键映射为 ESC；长按终端可选中文本复制
 - **只用 `apt-get`，不要用 `pkg`**：`pkg` 是 termux-tools 的壳脚本，会把平铺源的 `InRelease` 判定成 bad 并改写 `sources.list` 成官方 termux 源
@@ -241,7 +242,7 @@ JDK 21 (temurin) + `setup-android` + `sdkmanager platforms;android-34 build-tool
 |---|---|---|
 | `main`（默认分支） | 只有 README + 文档 | 仓库门面；`workflow_dispatch` 要求 workflow 文件在默认分支 |
 | `master` | runtime 构建流水线 + 补丁脚本 | 真正的 CI |
-| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK。**分支名沿用历史，代码已是 0.2.9**；推送即构建 |
+| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK。**分支名沿用历史，代码已是 0.2.10**；推送即构建 |
 | `aifactory-*` | 历史快照 | 存档，App 仍为 0.1.0 / targetSdk 34，**不要直接用** |
 
 Key 文件：
@@ -272,7 +273,7 @@ app/src/main/java/com/aifactory/app/
 | [`runtime-extra`](https://github.com/327542912/AIFactory/releases/tag/runtime-extra) | `gradle_8.7-1_all.deb` + `Packages`（手动维护） | `gradle 1.9.0.0` 替代品，131,417,012 B，sha256 `027493b1…3ce09`；流水线不碰它 |
 | [`downloads`](https://github.com/327542912/AIFactory/releases/tag/downloads) | `DOWNLOAD.md`（下载总表） | 四个大文件的直链 + sha256 + 装法，不含二进制 |
 | [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 143,210,636 B，sha256 `70d10e0a…6faa3`（3 个 platform + 3 个 build-tools + arm64 adb） |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.9-debug.apk` + `AIFactory-latest.apk` + 各自 `.sha256` | 覆盖升级用固定签名；每次构建自动替换 |
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.10-debug.apk` + `AIFactory-latest.apk` + 各自 `.sha256` | 覆盖升级用固定签名；每次构建自动替换 |
 
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
 
@@ -311,11 +312,11 @@ app/src/main/java/com/aifactory/app/
 
 - [x] 源码重编的 ARM64 bootstrap（自建前缀，已发布）
 - [x] 自建 apt 源（`pkg install` 可用）
-- [x] App 0.2.9：**真 PTY 终端**（vendor Termux `terminal-emulator` + `terminal-view`，`libtermux.so` 预编译进 `jniLibs`）、下载器断点续传、加速前缀、本地 deb 安装
+- [x] App 0.2.10：**真 PTY 终端**（vendor Termux `terminal-emulator` + `terminal-view`，`libtermux.so` 预编译进 `jniLibs`）、下载器断点续传、加速前缀、本地 deb 安装
 - [x] JDK 21 / git / apksigner / zip / unzip 进 `runtime-repo`（264 个 deb，前缀全部核对过 0 处 `com.termux`）
 - [x] Gradle 8.7 走独立 `runtime-extra` 源（绕开主源的 1.9.0.0）
 - [x] Android SDK 单一 zip 覆盖 34/35/36 + arm64 adb
-- [x] 固定签名 keystore：0.2.3 → 0.2.9 指纹一致（`05fc565e…`），可覆盖升级不丢 `/data/data` 数据
+- [x] 固定签名 keystore：0.2.3 → 0.2.10 指纹一致（`05fc565e…`），可覆盖升级不丢 `/data/data` 数据
 - [x] `scripts/device-build.sh`：设备端构建 → 验签 → 安装（Shizuku）→ 启动 → 扫 `FATAL EXCEPTION`
 - [ ] 设备端真跑通一次 `gradle assembleDebug`（脚本已就位，等你手机上跑）
 - [ ] arm64 版 Android SDK 打包
