@@ -22,6 +22,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,7 +48,11 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     @Volatile var altDown = false
     @Volatile private var view: TerminalView? = null
     private var session: TerminalSession? = null
-    var title by mutableStateOf("bash")
+
+    /** 标题用普通字段，不进 Compose 快照：每次输出都写状态会让整页重组，这是卡顿的主因。 */
+    @Volatile var currentTitle = "bash"
+        private set
+    @Volatile private var finished = true
 
     private val scaledDensity = ctx.resources.displayMetrics.scaledDensity
     private var fontPx = 13f * scaledDensity
@@ -59,7 +64,13 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         v.isFocusable = true
         v.isFocusableInTouchMode = true
         v.setTextSize(fontPx.toInt())
-        startSession().let { s -> v.attachSession(s) }
+        val s = session?.takeIf { !finished } ?: startSession()
+        v.attachSession(s)
+    }
+
+    /** 离开终端页只解绑视图，bash 会话继续活着，回来时 attachSession 会把整屏缓冲重新画出来。 */
+    fun detachView() {
+        view = null
     }
 
     /** 双指缩放：只改字号并让 TerminalView 重算行列，进而通过 JNI 给 PTY 发 SIGWINCH。 */
@@ -89,6 +100,8 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         )
         val s = TerminalSession(bash.path, ws.path, arrayOf("-l"), env, 3000, this)
         session = s
+        finished = false
+        currentTitle = "bash"
         return s
     }
 
@@ -113,25 +126,24 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
 
     fun restart() {
         close()
-        view?.let { v -> startSession().let { v.attachSession(it) } }
+        view?.let { v -> startSession().let { v.attachSession(it) } } ?: startSession()
     }
 
     fun close() {
         try { session?.finishIfRunning() } catch (_: Exception) {}
         session = null
+        finished = true
     }
 
     // ---- TerminalSessionClient ----
-    override fun onTextChanged(changedSession: TerminalSession) {
-        val t = changedSession.title
-        if (!t.isNullOrBlank()) title = t
-    }
+    override fun onTextChanged(changedSession: TerminalSession) {}
     override fun onTitleChanged(changedSession: TerminalSession) {
         val t = changedSession.title
-        if (!t.isNullOrBlank()) title = t
+        if (!t.isNullOrBlank()) currentTitle = t
     }
     override fun onSessionFinished(finishedSession: TerminalSession) {
-        title = "会话已退出"
+        finished = true
+        currentTitle = "会话已退出，点「重开会话」"
     }
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
         val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -179,10 +191,15 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
 }
 
 @Composable
-fun TerminalPage() {
-    val ctx = LocalContext.current
-    val bridge = remember { AiTerminalBridge(ctx) }
-    DisposableEffect(Unit) { onDispose { bridge.close() } }
+fun TerminalPage(bridge: AiTerminalBridge) {
+    // 每秒轮询一次标题，避免 onTextChanged 每行输出都触发重组
+    val title by produceState(initialValue = bridge.currentTitle) {
+        while (true) {
+            value = bridge.currentTitle
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    DisposableEffect(Unit) { onDispose { bridge.detachView() } }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -191,7 +208,7 @@ fun TerminalPage() {
         ) {
             Column(Modifier.weight(1f)) {
                 Text("AIFactory Runtime", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text(bridge.title, fontSize = 10.sp, color = Muted)
+                Text(title, fontSize = 10.sp, color = Muted)
             }
             TextButton(onClick = { bridge.restart() }) { Text("重开会话", fontSize = 12.sp) }
             TextButton(onClick = { bridge.pasteFromClipboard() }) { Text("粘贴", fontSize = 12.sp) }

@@ -78,6 +78,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
             }
         }
     }
+    val termBridge = remember { AiTerminalBridge(this@MainActivity) }
     val launchFilePicker = {
         filePicker.launch(arrayOf("*/*"))
     }
@@ -141,7 +142,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
                             persistFileRecords(context, importedFiles)
                         }
                     )
-                    Page.TERMINAL -> TerminalPage()
+                    Page.TERMINAL -> TerminalPage(termBridge)
                     Page.PLUGINS -> PluginsPage()
                     Page.SETTINGS -> SettingsPage()
                 }
