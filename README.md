@@ -1,5 +1,8 @@
 # AIFactory 0.2.2
 
+> **📦 只想拿文件？** → **[下载总入口 / All downloads](https://github.com/327542912/AIFactory/releases/tag/downloads)** —— APK、Runtime bootstrap、Android SDK、Gradle 8.7 的直链、体积、sha256 全在这一页。
+> 仓库里另外几个 release tag 各自只是其中一个文件，找不到东西时从这一页进。
+
 Android 上的自主软件开发工作台：自带 Linux Runtime（不依赖 Termux），Agent 可读写文件、执行命令、构建并签名 APK，再唤起系统安装器安装。
 
 ## 架构
