@@ -192,7 +192,9 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         val q = ::shQuote
         val b = File(root, "app/build")
         b.mkdirs()
-        val script = File(b, "aifactory-build.sh")
+        // 脚本不能放在 app/build 里：脚本自己要 rm -rf $B，等于执行中途把自己的文件删了，
+        // sh 边读边执行会因此中断。放到 app/ 下，构建目录清空时不动它。
+        val script = File(root, "app/.aifactory-build.sh")
         script.writeText(
             buildString {
                 appendLine("set -e")
