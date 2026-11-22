@@ -219,7 +219,7 @@ class AabBuilder(private val ctx: Context, private val rt: RuntimeEngine) {
             onLine("尝试下载：$u")
             val r = rt.run(
                 "curl -fL --retry 2 -o ${shQuote(tmp.path)} ${shQuote(u)} && mv ${shQuote(tmp.path)} ${shQuote(out.path)}",
-                home, 900, null, onLine
+                home, 900, emptyMap(), onLine
             )
             if (r.ok && out.exists() && out.length() > 10_000_000) {
                 return "已下载：" + out.path + "（" + out.length() + " B）"
