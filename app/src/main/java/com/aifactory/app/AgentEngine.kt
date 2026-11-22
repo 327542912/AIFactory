@@ -289,7 +289,8 @@ class AgentEngine(private val ctx: Context) {
             "build_apk" -> {
                 val dir = resolve(a.getString("project"))
                 val release = a.optString("release").equals("true", ignoreCase = true)
-                val r = packager.build(dir, release)
+                // 排进全局串行队列：避免与排队中的构build/apt 抢同一目录与进程
+                val r = Pipeline.exclusive { packager.build(dir, release) }
                 if (r.ok) "${r.message}\nAPK 路径：${r.apk?.path}"
                 else "${r.message}\n--- 构建日志（末尾）---\n${tailText(r.log, 7000)}"
             }

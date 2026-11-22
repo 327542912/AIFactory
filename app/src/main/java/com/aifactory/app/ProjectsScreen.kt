@@ -22,7 +22,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -70,54 +69,36 @@ fun ProjectsScreen() {
     val scope = rememberCoroutineScope()
     var projects by remember { mutableStateOf(listProjects(rt)) }
     var selected by remember { mutableStateOf<String?>(null) }
-    var log by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var apk by remember { mutableStateOf<File?>(null) }
-    var job by remember { mutableStateOf<Job?>(null) }
+    // 日志/忙碌/产物全部来自进程级 Pipeline：切页不丢、不取消
+    val log = Pipeline.log
+    val busy = Pipeline.busy
+    val apk = Pipeline.lastApk
 
     val exporter = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.android.package-archive")
     ) { uri: Uri? ->
-        val f = apk
+        val f = Pipeline.lastApk
         if (uri != null && f != null) scope.launch(Dispatchers.IO) {
             try {
                 ctx.contentResolver.openOutputStream(uri)?.use { o -> f.inputStream().use { it.copyTo(o) } }
-                log += "\n已导出 APK。"
+                // 导出结果落到 Pipeline 日志，切页也能看到
+            Pipeline.appendNote("已导出 APK。")
             } catch (e: Exception) {
-                log += "\n导出失败：${e.message}"
+                Pipeline.appendNote("导出失败：${e.message}")
             }
         }
     }
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) scope.launch {
-            log = importArchive(ctx, rt, uri)
+            Pipeline.appendNote(importArchive(ctx, rt, uri))
             projects = listProjects(rt)
         }
     }
 
     fun runBuild(release: Boolean) {
         val name = selected ?: return
-        if (busy) return
-        busy = true
-        log = ""
-        apk = null
-        job = scope.launch {
-            KeepAliveService.start(ctx)
-            try {
-                val res = pk.build(File(rt.workspace, name), release) { chunk -> log = (log + chunk).takeLast(12000) }
-                apk = res.apk
-                log = (if (res.ok) "✅ " else "❌ ") + res.message +
-                    if (res.ok) "" else "\n\n" + tailText(res.log, 6000)
-            } catch (e: CancellationException) {
-                log += "\n已取消。"
-                throw e
-            } catch (e: Throwable) {
-                log += "\n失败：${e.message}"
-            } finally {
-                KeepAliveService.stop(ctx)
-                busy = false
-            }
-        }
+        // 交给全局串行调度器：此时若还有 apt 安装或别的构建在跑，会自动排队而不是抢锁
+        Pipeline.buildProject(ctx, pk, File(rt.workspace, name), release)
     }
 
     Column(
@@ -145,9 +126,16 @@ fun ProjectsScreen() {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(enabled = selected != null && !busy, onClick = { runBuild(false) }) { Text("构建 Debug") }
             Button(enabled = selected != null && !busy, onClick = { runBuild(true) }) { Text("构建 Release（签名）") }
-            if (busy) TextButton(onClick = { job?.cancel() }) { Text("停止") }
+            if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
         }
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (busy) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text(
+                Pipeline.current + (Pipeline.stage.takeIf { it.isNotBlank() }?.let { " · " + it } ?: "") +
+                    (if (Pipeline.queued > 0) "（排队 ${Pipeline.queued}）" else ""),
+                fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .7f)
+            )
+        }
 
         val out = apk
         if (out != null) Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -155,7 +143,7 @@ fun ProjectsScreen() {
                 Text(out.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Text("${out.length() / 1024} KB", fontSize = 11.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { log += "\n" + Installer.install(ctx, out) }) { Text("安装") }
+                    Button(onClick = { Pipeline.appendNote(Installer.install(ctx, out)) }) { Text("安装") }
                     OutlinedButton(onClick = { exporter.launch(out.name) }) { Text("导出 APK") }
                 }
             }
