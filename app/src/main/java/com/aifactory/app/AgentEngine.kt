@@ -530,7 +530,7 @@ class AgentEngine(private val ctx: Context) {
             }
             "build_apk" -> {
                 val projArg = a.optString("project").ifBlank { WorkState.currentProject ?: "" }
-                if (projArg.isBlank()) return "没有指定项目，也没有当前项目。先 list_dir 看工作区，或让用户在项目页选中项目。"
+                if (projArg.isBlank()) "没有指定项目，也没有当前项目。先 list_dir 看工作区，或让用户在项目页选中项目。" else {
                 val dir = resolve(projArg)
                 val release = a.optString("release").equals("true", ignoreCase = true)
                 // 排进全局串行队列：避免与排队中的构build/apt 抢同一目录与进程
@@ -538,6 +538,7 @@ class AgentEngine(private val ctx: Context) {
                 val envHead = if (rt.isInstalled()) "【构建环境】本机工具链（离线五步链）" else "【构建环境】Runtime 未安装，构建会失败"
                 if (r.ok) "$envHead\n${r.message}\nAPK 路径：${r.apk?.path}"
                 else "$envHead\n${r.message}\n--- 构建日志（末尾）---\n${tailText(r.log, 7000)}"
+                }
             }
             "install_apk" -> {
                 val p = a.getString("path")
