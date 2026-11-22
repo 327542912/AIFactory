@@ -65,6 +65,8 @@ if [ -n "$REPO_URL" ]; then
 		cat "$SL"
 	} > "$SL.new"
 	mv "$SL.new" "$SL"
+	# 去重：脚本和工作流各写过一次，apt 见到重复行会抱怨
+	awk '!seen[$0]++' "$SL" > "$SL.n" && mv "$SL.n" "$SL"
 	echo "sources.list -> $REPO_URL"
 fi
 
