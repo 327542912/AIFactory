@@ -82,3 +82,21 @@ jobs:
           git commit -m "apk: sync ${VER} (${GITHUB_SHA:0:8})"
           git push origin main
 
+      # apk-latest 这个 tag 常被直接引用（设置有默认值/文档里写死），必须跟着构建一起更新
+      - name: Publish APK to release apk-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view apk-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "APK (rolling latest)" \
+              --notes "每次 android-build 成功后自动替换。仓库 main:apk/ 下有同名文件。"
+          # 旧版本号资产删掉，避免 0.2.4 / 0.2.5 并存让人下错
+          for a in $(gh release view apk-latest --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name'); do
+            case "$a" in AIFactory-*.apk|AIFactory-*.apk.sha256)
+              cur=$(gh release view apk-latest --repo "$GITHUB_REPOSITORY" --json assets -q ".assets[]|select(.name==\"$a\")|.name")
+              [ -n "$cur" ] && gh release delete-asset apk-latest "$a" -y ;;
+            esac
+          done
+          gh release upload apk-latest --repo "$GITHUB_REPOSITORY" --clobber \
+            /tmp/apkout/*.apk /tmp/apkout/*.sha256
