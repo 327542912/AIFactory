@@ -35,12 +35,16 @@ object ArchiveInstaller {
         try {
             val actual = download(url, tmp, progress)
             if (sha256.isNotBlank() && !actual.equals(sha256.trim(), ignoreCase = true)) {
+                tmp.delete()   // 哈希不对说明这份残包没救，删掉重来
                 throw IOException("SHA-256 不匹配：期望 ${sha256.trim()}，实际 $actual")
             }
             progress("下载完成，SHA-256：$actual")
             installBootstrapStream(ctx, FileInputStream(tmp), progress)
-        } finally {
             tmp.delete()
+        } catch (e: Exception) {
+            // 保留残包，下次点「下载并安装」会从断点续传
+            progress("已保留 ${tmp.length() / 1048576} MB 进度，下次点击可续传")
+            throw e
         }
     }
 
@@ -54,8 +58,10 @@ object ArchiveInstaller {
                 val actual = download(url, tmp, progress)
                 progress("下载完成，SHA-256：$actual")
                 installSdkStream(ctx, FileInputStream(tmp), progress)
-            } finally {
                 tmp.delete()
+            } catch (e: Exception) {
+                progress("已保留 ${tmp.length() / 1048576} MB 进度，下次点击可续传")
+                throw e
             }
         }
 
@@ -170,38 +176,106 @@ object ArchiveInstaller {
 
     // ---------- 通用 ----------
 
+    /**
+     * 下载到 dest。
+     *
+     * GitHub Release 的直链会 302 跳到 objects.githubusercontent.com；挂 VPN / 移动网络时，
+     * 中途中被掐断一次就报 "Software caused connection abort"。所以这里：
+     *   1. 手动跟 3xx（最多 5 跳），不依赖 HttpURLConnection 的自动跟随；
+     *   2. 带 User-Agent / Accept，部分 CDN 缺 UA 会直接断；
+     *   3. 失败按 HTTP Range 断点续传，最多 5 次，成功后再算整份 sha256。
+     */
     private fun download(url: String, dest: File, progress: (String) -> Unit): String {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 20000
-        conn.readTimeout = 60000
-        conn.instanceFollowRedirects = true
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) throw IOException("下载失败：HTTP $code")
-            val total = conn.contentLengthLong
-            val md = MessageDigest.getInstance("SHA-256")
-            var done = 0L
-            var last = 0L
-            conn.inputStream.use { ins ->
-                FileOutputStream(dest).use { out ->
-                    val buf = ByteArray(BUF)
-                    while (true) {
-                        val n = ins.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                        md.update(buf, 0, n)
-                        done += n
-                        if (done - last >= 2_000_000) {
-                            last = done
-                            progress("下载中 ${done / 1048576} / ${if (total > 0) (total / 1048576).toString() else "?"} MB")
+        dest.parentFile?.mkdirs()
+        var attempt = 0
+        var last: Exception? = null
+        while (attempt < 5) {
+            attempt++
+            var conn: HttpURLConnection? = null
+            try {
+                val have = if (dest.exists()) dest.length() else 0L
+                conn = connect(url, have)
+                val code = conn.responseCode
+                if (code == 416) {
+                    dest.delete()
+                    throw IOException("服务器拒绝了续传位置（HTTP 416），已重置为从头下载")
+                }
+                if (code !in 200..299) throw IOException("下载失败：HTTP $code")
+                val append = code == 206 && have > 0
+                val remain = conn.contentLengthLong
+                val total = if (append) have + remain else remain
+                progress(if (append) "续传：已有 ${have / 1048576} MB（第 $attempt 次尝试）" else "开始下载（第 $attempt 次尝试）")
+                var done = if (append) have else 0L
+                var lastTick = done
+                FileOutputStream(dest, append).use { out ->
+                    conn.inputStream.use { ins ->
+                        val buf = ByteArray(BUF)
+                        while (true) {
+                            val n = ins.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            if (done - lastTick >= 2_000_000) {
+                                lastTick = done
+                                progress("下载中 ${done / 1048576} / ${if (total > 0) (total / 1048576).toString() else "?"} MB")
+                            }
                         }
                     }
                 }
+                if (total > 0 && done < total) throw IOException("连接提前结束（$done / $total 字节），已保留进度")
+                return sha256(dest)
+            } catch (e: Exception) {
+                last = e
+                progress("第 $attempt 次失败：${e.message ?: e.javaClass.simpleName}")
+                if (e is java.net.MalformedURLException || attempt >= 5) break
+                try { Thread.sleep(1500L * attempt) } catch (_: InterruptedException) {}
+            } finally {
+                conn?.disconnect()
             }
-            return md.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        } finally {
-            conn.disconnect()
         }
+        throw IOException(
+            "下载失败（已重试 5 次）：${last?.message ?: "未知错误"}。" +
+                "可改用浏览器打开同一地址下载 zip，再点「选择本地 zip」导入。", last
+        )
+    }
+
+    /** 建连接并手动跟重定向；resumeFrom > 0 时带 Range 头。 */
+    private fun connect(url: String, resumeFrom: Long): HttpURLConnection {
+        var current = url
+        var hops = 0
+        while (true) {
+            val c = URL(current).openConnection() as HttpURLConnection
+            c.connectTimeout = 30_000
+            c.readTimeout = 120_000
+            c.instanceFollowRedirects = false
+            c.setRequestProperty("User-Agent", "AIFactory/${BuildConfig.VERSION_NAME} (Android)")
+            c.setRequestProperty("Accept", "*/*")
+            c.setRequestProperty("Connection", "close")
+            if (resumeFrom > 0) c.setRequestProperty("Range", "bytes=$resumeFrom-")
+            val code = c.responseCode
+            if (code in 301..308) {
+                val loc = c.getHeaderField("Location") ?: throw IOException("HTTP $code 但没有 Location 头")
+                c.disconnect()
+                current = if (loc.startsWith("http")) loc else URL(URL(current), loc).toString()
+                hops++
+                if (hops > 5) throw IOException("重定向超过 5 跳：$loc")
+                continue
+            }
+            return c
+        }
+    }
+
+    private fun sha256(f: File): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        FileInputStream(f).use { ins ->
+            val buf = ByteArray(BUF)
+            while (true) {
+                val n = ins.read(buf)
+                if (n < 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     /** 解压 zip，返回 SYMLINKS.txt 中的行（若有）。 */

@@ -109,7 +109,8 @@ fun RuntimeSetupCard() {
             }
             Text(
                 "Runtime 与 SDK 都由本仓库的 GitHub Actions 构建（包名 com.aifactory.app）。SDK 内含 platforms/android-34/35/36 与 build-tools/34.0.0/35.0.0/36.0.0，" +
-                    "其中 aapt2 / zipalign / aapt / aidl 是编译好的 aarch64 静态二进制（官方包是 x86_64，手机上跑不起来）。地址已默认填好，直接点「下载并安装」。",
+                    "其中 aapt2 / zipalign / aapt / aidl 是编译好的 aarch64 静态二进制（官方包是 x86_64，手机上跑不起来）。地址已默认填好，直接点「下载并安装」。\n\n" +
+                    "下载会手动跟随 GitHub 的 302 跳转；中断后按 HTTP Range 断点续传，最多重试 5 次，残包留在缓存里，再点一次接着下。",
                 fontSize = 11.sp, lineHeight = 16.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
             )
