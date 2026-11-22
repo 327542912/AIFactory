@@ -95,10 +95,27 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         val ws = File(home, "projects").apply { mkdirs() }
         val tmp = File(prefix, "tmp").apply { mkdirs() }
         val bash = File(prefix, "bin/bash")
+        val linkTarget = try {
+            if (java.nio.file.Files.isSymbolicLink(bash.toPath()))
+                java.nio.file.Files.readSymbolicLink(bash.toPath()).toString() else null
+        } catch (e: Exception) { null }
         if (!bash.exists()) {
-            problem = "找不到 " + bash.path + "。Runtime 不完整（可能是 bootstrap 只装了一半，或被官方 termux 源污染的包替换过）。到「设置」第 1 张卡点「选择本地 zip」，选 bootstrap-aarch64.zip 重装 Runtime；home/ 里的项目和 SDK 不会丢，usr 里的 apt 包需要重装。"
+            val why = when {
+                linkTarget != null -> "符号链接指向 " + linkTarget + "，该文件不存在"
+                else -> "文件不存在"
+            }
+            problem = bash.path + "（" + why + "）。" +
+                "Runtime 的 usr 树不完整，常见于 bootstrap 没装完，或被官方 termux 源（com.termux 前缀）的包替换过。" +
+                "修复：设置页第 1 张卡点「选择本地 zip」，选 bootstrap-aarch64.zip 重装 Runtime。" +
+                "home/ 里的项目和已装 SDK 不会丢；usr 里的 apt 包（java/gradle/git）需要重装一次。"
             finished = true
             currentTitle = "Runtime 不完整"
+            return null
+        }
+        if (!bash.canExecute()) {
+            problem = bash.path + " 存在但没有可执行权限。重装 Runtime 可修复。"
+            finished = true
+            currentTitle = "Runtime 不可执行"
             return null
         }
         problem = null
