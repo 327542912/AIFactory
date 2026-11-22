@@ -17,9 +17,9 @@
 | 渠道 | 地址 | 备注 |
 |---|---|---|
 | **仓库内文件**（手机点开即下） | [`apk/AIFactory-latest.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-latest.apk) | 固定路径，每次构建覆盖更新，链接永不失效 |
-| 带版本号的文件 | [`apk/AIFactory-0.2.3-debug.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-0.2.3-debug.apk) | 存档用 |
+| 带版本号的文件 | [`apk/AIFactory-0.2.4-debug.apk`](https://github.com/327542912/AIFactory/raw/main/apk/AIFactory-0.2.4-debug.apk) | 存档用 |
 | Release 资产 | [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | 与上面同一份文件，附 `.sha256` |
-| **Android SDK（arm64）** | [`sdk-latest/android-sdk-aarch64.zip`](https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip) | 89 MB，内含 `platforms/android-34` + `build-tools/34.0.0`，aapt2/zipalign/aapt/aidl 为 aarch64 静态二进制；App 内默认地址已指向它 |
+| **Android SDK（arm64，多版本）** | [`sdk-latest/android-sdk-aarch64.zip`](https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip) | 133 MB，`platforms/android-34·35·36` + `build-tools/34.0.0·35.0.0·36.0.0`，native 工具全部 aarch64 静态；App 默认地址已指向它 |
 
 > debug 签名，仅供自用；同包名同签名可直接覆盖安装，`/data/data/com.aifactory.app` 里的 Runtime 不会丢。
 
@@ -45,7 +45,7 @@
 | 项 | 值 |
 |---|---|
 | 应用包名 / applicationId | `com.aifactory.app` |
-| 当前版本 | `0.2.3`（versionCode 6） |
+| 当前版本 | `0.2.4`（versionCode 7） |
 | `targetSdk` | **28**（硬性上限，见下） |
 | `minSdk` / `compileSdk` | 26 / 34 |
 | Runtime 前缀 | `/data/data/com.aifactory.app/files/usr` |
@@ -66,10 +66,10 @@ proot 靠 `ptrace` 拦截每个系统调用做路径重写，代价是：每次�
 
 ### 1. 安装 App
 
-从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 下载 `AIFactory-0.2.3-debug.apk`（debug 签名，仅供自用）。
+从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 下载 `AIFactory-0.2.4-debug.apk`（debug 签名，仅供自用）。
 
 ```text
-https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-0.2.3-debug.apk
+https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-0.2.4-debug.apk
 ```
 
 ### 2. 安装 Runtime
@@ -104,7 +104,18 @@ pkg install openjdk-21 gradle git apksigner zip unzip
 https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip
 ```
 
-包内是 `platforms/android-34`（含 `android.jar`）与 `build-tools/34.0.0`。**关键点**：官方 `build-tools` 里的 `aapt2` / `zipalign` / `aapt` / `aidl` 是 x86_64 ELF，在 arm64 手机上无法执行；这个包里换成了 aarch64 静态二进制，`lib/d8.jar`、`lib/apksigner.jar` 等 jar 与脚本仍为官方原样。
+包内是三条完整版本线，一份覆盖到 `compileSdk 36`：
+
+| 目录 | 内容 | native 工具 |
+|---|---|---|
+| `platforms/android-34` / `35` / `36` | 各自 `android.jar` + `core-for-system-modules.jar` + `framework.aidl` | — |
+| `build-tools/34.0.0` | 官方 jars（`d8.jar`、`apksigner.jar`） | aarch64 静态 `aapt2/aapt/aidl/zipalign/dexdump/split-select` |
+| `build-tools/35.0.0` | 同上 | 同上（35.0.2 静态二进制） |
+| `build-tools/36.0.0` | 同上 | 同上（**当前用 35.0.2 的 aapt2**，官方 36 无 aarch64 预编译；实测编 API 36 资源可用，遇到 `aapt2` 报错请回报） |
+
+**关键点**：官方 `build-tools` 的 `aapt2` / `zipalign` / `aapt` / `aidl` 是 x86_64 ELF，在 arm64 手机上根本无法 `exec`；这里全部换成 aarch64 静态版，jar 与脚本保持官方原样（它们跑在 JVM 上，与架构无关）。
+
+体积裁剪说明：`platforms/*/data`（每平台约 100 MB 的 framework 资源，`aapt2` 用 `android.jar` 即可）、IDE 用的 `skins/templates/android-stubs-src.jar`、`build-tools/*/lib64`（LLVM/渲染脚本，x86_64）已剔除。
 
 ### 6. 在手机上编 APK
 
@@ -199,8 +210,8 @@ app/src/main/java/com/aifactory/app/
 |---|---|---|
 | [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,610,948 B，sha256 `1738bf87…0d750d` |
 | [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | ~200 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源 |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.3-debug.apk` + `.sha256` | 16,507,552 B |
-| [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 89,330,838 B，sha256 `69907679…83391` |
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.4-debug.apk` + `.sha256` | 16,507,552 B |
+| [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 139,929,613 B，sha256 `0d5f91d3…57c28` |
 
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
 
