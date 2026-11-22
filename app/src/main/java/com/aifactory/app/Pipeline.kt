@@ -144,7 +144,7 @@ internal object Pipeline {
         val saved = runCatching {
             val dir = File(RuntimePaths.home(ctx), ".aifactory/logs").apply { mkdirs() }
             val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-            val name = stamp + "-" + t.title.replace(Regex("[^\p{L}\p{N}]+"), "_") + ".log"
+            val name = stamp + "-" + t.title.map { if (it.isLetterOrDigit()) it else '_' }.joinToString("") + ".log"
             val f = File(dir, name)
             f.writeText("title: " + t.title + "\nok: " + ok + "\nms: " + (System.currentTimeMillis() - started) +
                 "\n\n" + full)
