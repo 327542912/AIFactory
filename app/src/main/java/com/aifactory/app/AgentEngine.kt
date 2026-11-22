@@ -59,6 +59,8 @@ class AgentEngine(private val ctx: Context) {
             mapOf("project" to "项目目录（相对工作区）", "release" to "true=签名的 release，false=debug（默认）"), listOf("project")),
         ToolDef("install_apk", "唤起系统安装器安装 APK（需要用户在弹窗中确认）。",
             mapOf("path" to "APK 路径（build_apk 返回的路径）"), listOf("path")),
+        ToolDef("launch_app", "装完后真正启动应用（用 PackageManager 调起 LAUNCHER），用来验证它能不能起来。注意：Android 不允许第三方 App 读别的进程 logcat，所以这里只能确认\"能启动、没立即崩\"，界面是否正常要用户看或截图。",
+            mapOf("package" to "包名（install_apk 返回的包名）", "path" to "或给 APK 路径，会从 APK 读包名"), emptyList()),
         ToolDef("pipeline_status", "查看流水线现场：当前在跑什么、最近任务成功/失败、最近一次构建日志与产物、自检结果。排查问题时先调用它。",
             emptyMap(), emptyList()),
         ToolDef("read_log", "读取日志文件（默认最近一次任务日志），可指定行数。",
@@ -96,6 +98,7 @@ class AgentEngine(private val ctx: Context) {
         appendLine("你是 AIFactory 内置的自主软件工程师，运行在用户的 Android 手机上，拥有一个独立的类 Linux Runtime（不依赖 Termux）。")
         appendLine("工作区：${workspace.path}（每个项目一个子目录）。所有文件工具只能访问工作区。")
         appendLine("工作流程：简述计划 → 用 write_file 创建/修改文件 → 用 build_apk 构建 → 失败时阅读日志、修复、重新构建（同一问题最多重试 5 次）→ 成功后汇报 APK 路径。")
+        appendLine("交付闸门（硬规则，不可绕过）：build_apk 成功 ≠ 应用可用。没有调用 launch_app 真正把它启动起来，禁止说「测试通过 / 已运行 / 能正常使用」，只能说「构建成功，尚未验证运行」。装完就调 launch_app；启动失败或用户反馈闪退，先 inspect_apk 看入口 Activity 与权限，再改代码重编。")
         appendLine("只有用户明确要求安装时才调用 install_apk。不确定环境时先调用 toolchain_status；缺少工具链时告诉用户到 设置 → Runtime 安装，不要自行下载未知来源的二进制。")
         appendLine("可以用 apt-get install / pip / npm 安装依赖。不要用 pkg（会改写软件源）。apt 的源是本项目自建仓库，只包含已发布的包；找不到时告诉用户把包名加入 GitHub 工作流的 repo_packages 重新发布。不要手动改 apt 源为官方 Termux 仓库（路径前缀不同，会损坏 Runtime）。")
         appendLine("删除、覆盖大量文件前先向用户说明。回答使用中文，简洁。")
@@ -538,6 +541,31 @@ class AgentEngine(private val ctx: Context) {
                 val envHead = if (rt.isInstalled()) "【构建环境】本机工具链（离线五步链）" else "【构建环境】Runtime 未安装，构建会失败"
                 if (r.ok) "$envHead\n${r.message}\nAPK 路径：${r.apk?.path}"
                 else "$envHead\n${r.message}\n--- 构建日志（末尾）---\n${tailText(r.log, 7000)}"
+                }
+            }
+            "launch_app" -> {
+                val hint = a.optString("package").ifBlank { a.optString("path") }
+                if (hint.isBlank()) "需要 package 或 path" else {
+                    val pm = ctx.packageManager
+                    val pkg = if (a.optString("package").isNotBlank()) a.optString("package") else {
+                        val f = File(hint).let { if (it.isAbsolute) it else File(workspace, hint) }
+                        @Suppress("DEPRECATION")
+                        pm.getPackageArchiveInfo(f.path, 0)?.packageName ?: ""
+                    }
+                    if (pkg.isBlank()) "解析不到包名：$hint"
+                    else {
+                        val intent = pm.getLaunchIntentForPackage(pkg)
+                        if (intent == null) "包 $pkg 没有 LAUNCHER Activity（清单里缺 intent-filter MAIN/LAUNCHER），装上也点不开。"
+                        else withContext(Dispatchers.Main) {
+                            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            try {
+                                ctx.startActivity(intent)
+                                "已启动 $pkg。能否正常显示需要用户确认；我读不到它的 logcat（Android 权限隔离）。"
+                            } catch (e: Exception) {
+                                "启动失败：" + (e.message ?: e.javaClass.simpleName)
+                            }
+                        }
+                    }
                 }
             }
             "install_apk" -> {

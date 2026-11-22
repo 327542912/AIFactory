@@ -25,6 +25,35 @@ object Publisher {
 
     data class Result(val ok: Boolean, val summary: String, val releaseUrl: String?)
 
+    /** 设置页「创建/检查仓库」：不发布，只把仓库建好并把地址回填进设置。 */
+    fun ensureRepo(cfg: AppConfig, nameHint: String, onLog: (String) -> Unit): Result {
+        val token = cfg.ghToken.trim()
+        if (token.isEmpty()) return Result(false, "先填 Token（需 repo 权限），否则读不到账号也建不了仓库。", null)
+        val existing = cfg.ghRepo.trim()
+        if (existing.contains("/")) {
+            val r = request("GET", "$API/repos/$existing", token, null, "application/json", onLog)
+            return if (r == null) Result(false, "仓库 $existing 不存在或 Token 无权限。", null)
+            else Result(true, "仓库已存在：" + existing, "https://github.com/" + existing)
+        }
+        val login = request("GET", "$API/user", token, null, "application/json", onLog)?.optString("login", "")
+        if (login.isNullOrBlank()) return Result(false, "Token 无效或没有 user 权限。", null)
+        val name = nameHint.lowercase().replace(Regex("[^a-z0-9._-]"), "-").trim('-').ifBlank { "aifactory-app" }
+        val repo = login + "/" + name
+        val exists = request("GET", "$API/repos/$repo", token, null, "application/json", { })
+        if (exists == null) {
+            onLog("新建 public 仓库 $repo …")
+            val made = request("POST", "$API/user/repos", token,
+                ("{\"name\":\"" + name + "\",\"private\":false,\"auto_init\":true}").toByteArray(),
+                "application/json", onLog)
+            if (made == null) return Result(false, "建仓失败：$repo（检查 Token 是否有 repo 权限）", null)
+            onLog("已新建：https://github.com/$repo")
+        } else {
+            onLog("已存在，直接复用：$repo")
+        }
+        cfg.ghRepo = repo
+        return Result(true, "仓库就绪：" + repo, "https://github.com/" + repo)
+    }
+
     fun publish(
         ctx: Context,
         cfg: AppConfig,

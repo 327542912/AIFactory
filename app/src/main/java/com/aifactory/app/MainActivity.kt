@@ -374,12 +374,31 @@ private fun GitHubCard() {
     var repo by remember { mutableStateOf(cfg.ghRepo) }
     var token by remember { mutableStateOf(cfg.ghToken) }
     var tag by remember { mutableStateOf(cfg.ghTagPrefix) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var link by remember { mutableStateOf<String?>(null) }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("发布：GitHub", fontWeight = FontWeight.SemiBold)
             OutlinedTextField(repo, { repo = it; cfg.ghRepo = it }, label = { Text("仓库 owner/repo（留空=自动新建同名仓库）") }, placeholder = { Text("留空即可，首次发布会自动建仓库") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(token, { token = it; cfg.ghToken = it }, label = { Text("Token（需 repo 权限）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(tag, { tag = it; cfg.ghTagPrefix = it }, label = { Text("tag 前缀（默认 build）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            val scope = rememberCoroutineScope()
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(enabled = token.isNotBlank(), onClick = {
+                    scope.launch(Dispatchers.IO) {
+                        val r = Publisher.ensureRepo(cfg, "aifactory-app") { }
+                        withContext(Dispatchers.Main) {
+                            repo = cfg.ghRepo
+                            status = if (r.ok) "✅ " + r.summary else "❌ " + r.summary
+                            link = r.releaseUrl
+                        }
+                    }
+                }) { Text("创建 / 检查仓库") }
+                if (link != null) TextButton(onClick = {
+                    ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(link!!)))
+                }) { Text("打开仓库") }
+            }
+            if (status != null) Text(status!!, fontSize = 11.sp, color = Muted)
             Text("仓库留空时：按 Token 读账号名，用项目名自动新建 public 仓库并回填到上面。也可手填已有 owner/repo。Token 存应用私有存储。", fontSize = 11.sp, color = Muted)
             Text(
                 "Google Play（2026 现状，别被旧文案误导）：\n" +

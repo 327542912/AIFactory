@@ -77,6 +77,7 @@ fun ProjectsScreen() {
 
     // 新建项目向导：方向 → 名字 → 需求 → PRD 预览 → 确认创建
     var showNew by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<String?>(null) }
     var kind by remember { mutableStateOf(ProjectScaffold.Kind.APP) }
     var newName by remember { mutableStateOf("") }
     var newBrief by remember { mutableStateOf("") }
@@ -265,6 +266,7 @@ fun ProjectsScreen() {
                 val name = selected ?: return@OutlinedButton
                 Pipeline.buildAab(ctx, rt, File(rt.workspace, name))
             }) { Text("构建 AAB（上架）") }
+            OutlinedButton(enabled = selected != null && !busy, onClick = { confirmDelete = selected }) { Text("删除项目") }
             if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
             TextButton(onClick = {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
@@ -341,6 +343,27 @@ fun ProjectsScreen() {
                 fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
             )
         }
+        val del = confirmDelete
+        if (del != null) AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("删除项目 $del？") },
+            text = { Text("会递归删除 " + del + " 目录下的全部源码、产物与日志，不可恢复。建议先「导出源码包」或推一次 GitHub。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = null
+                    scope.launch {
+                        val dir = File(rt.workspace, del)
+                        val left = withContext(Dispatchers.IO) { runCatching { dir.deleteRecursively() } }
+                        val gone = !dir.exists()
+                        Pipeline.appendNote(if (gone) "已删除项目 " + del else "删除失败：" + del + "（" + (left.exceptionOrNull()?.message ?: "仍有文件删不掉") + "）")
+                        if (del == WorkState.currentProject) WorkState.currentProject = null
+                        projects = listProjects(rt)
+                        selected = projects.firstOrNull()
+                    }
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("取消") } }
+        )
         Text(
             "提示：Release 使用应用内生成的私有密钥签名；覆盖安装同一应用时签名必须一致。",
             fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
