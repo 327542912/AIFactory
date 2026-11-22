@@ -78,7 +78,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
             }
         }
     }
-    val termBridge = remember { AiTerminalBridge(this@MainActivity) }
+    val termBridge = remember { AiTerminalBridge(context) }
     val launchFilePicker = {
         filePicker.launch(arrayOf("*/*"))
     }
