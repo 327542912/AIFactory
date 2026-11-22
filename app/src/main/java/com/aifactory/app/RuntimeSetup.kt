@@ -57,7 +57,6 @@ fun RuntimeSetupCard() {
 
     val debPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
         if (!uris.isNullOrEmpty()) SetupRunner.run(ctx) {
-            LocalRepo.stageBundled(ctx)
             val repo = LocalRepo.dir(ctx)
             val saved = ArrayList<File>()
             withContext(Dispatchers.IO) {
@@ -69,25 +68,47 @@ fun RuntimeSetupCard() {
                     saved += f
                 }
             }
-            SetupRunner.report("已拷入 " + saved.size + " 个 deb（" + (saved.sumOf { it.length() } / 1048576) + " MB），生成本地索引…")
+            LocalRepo.stageBundled(ctx)
+            // 拒收官方 termux 包：它们把前缀写死成 com.termux，装进来会毁掉 bash/apt
+            val rejected = ArrayList<String>()
+            val picked = ArrayList<File>()
+            for (f in saved) {
+                if (withContext(Dispatchers.IO) { LocalRepo.isForeignPrefix(rt, repo, f) }) {
+                    rejected += f.name
+                    f.delete()
+                } else picked += f
+            }
+            if (picked.isEmpty()) {
+                SetupRunner.report("选中的 .deb 全是官方 Termux 包（内部路径是 com.termux），已全部拒收：\n" + rejected.joinToString("\n"))
+                return@run
+            }
+            SetupRunner.report("已拷入 " + picked.size + " 个 deb（" + (picked.sumOf { it.length() } / 1048576) + " MB），生成本地索引…")
             val (ok, info) = withContext(Dispatchers.IO) { LocalRepo.rebuild(ctx, rt) }
             if (!ok) {
                 SetupRunner.report("本地索引生成失败：" + info)
                 return@run
             }
             LocalRepo.ensureSource(ctx)
-            val names = info.split(' ').filter { it.isNotBlank() }
-            SetupRunner.report("本地索引就绪（" + names.size + " 个包）：" + names.joinToString(" ") + "，开始安装…")
+            // 只装「这次选进来的 + 内置库包」，不碰仓库里其它残留
+            val bundled = listOf("libandroid-shmem", "libandroid-spawn", "libjpeg-turbo", "littlecms")
+            val names = (withContext(Dispatchers.IO) {
+                picked.map { LocalRepo.packageName(rt, repo, it) }
+            } + bundled).filter { it.isNotBlank() }.distinct()
+            SetupRunner.report("本次安装： " + names.joinToString(" ") +
+                (if (rejected.isEmpty()) "" else "（已拒收 " + rejected.size + " 个官方 Termux 包）") + "，开始…")
+            val nm = names.joinToString(" ")
             val cmd = "dpkg --configure -a >/dev/null 2>&1; " +
-                "apt-get update -o Acquire::Retries=0 2>&1 | tail -12; " +
-                "apt-get install -y " + names.joinToString(" ") + " 2>&1"
+                "apt-get update -o Acquire::Retries=0 2>&1 | tail -6; " +
+                "{ apt-get install -y " + nm + " 2>&1 || { dpkg -P apt-ftptarchive apt-transport-tor db >/dev/null 2>&1; apt-get install -y " + nm + " 2>&1; }; }"
             val r = rt.run(cmd, repo, 3600) { SetupRunner.report(tailText(it, 1400)) }
-            if (r.ok) {
-                SetupRunner.report("本地包安装完成。")
-            } else {
-                SetupRunner.report("apt 未能解析依赖，改用 dpkg 直装（文件会装进去，缺依赖的会在上面留 ✗）…")
-                val fb = rt.run("dpkg -i --force-depends *.deb 2>&1 | tail -25", repo, 3600) { SetupRunner.report(tailText(it, 1400)) }
+            if (!r.ok) {
+                SetupRunner.report("apt 未能解析，改用 dpkg 直装（只装本次的包）…")
+                val files = picked.map { it.name }.joinToString(" ") +
+                    " libandroid-shmem_*.deb libandroid-spawn_*.deb libjpeg-turbo_*.deb littlecms_*.deb"
+                val fb = rt.run("dpkg -i --force-depends " + files + " 2>&1 | tail -20", repo, 3600) { SetupRunner.report(tailText(it, 1200)) }
                 SetupRunner.report((if (fb.ok) "dpkg 直装结束（退出 0）。" else "dpkg 直装退出码 " + fb.exitCode + "。") + "\n" + tailText(fb.output, 700))
+            } else {
+                SetupRunner.report("本地包安装完成。")
             }
             // 装完自检：java 到底能不能跑，缺的是哪个 .so
             val probe = rt.run(

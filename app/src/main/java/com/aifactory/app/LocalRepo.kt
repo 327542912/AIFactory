@@ -61,6 +61,14 @@ object LocalRepo {
         return md.digest().joinToString("") { String.format("%02x", it) }
     }
 
+    /** 官方 Termux 包（内部路径写死 com.termux）装进来会把本 runtime 的 bash/apt 换掉，一律拒收。 */
+    fun isForeignPrefix(rt: RuntimeEngine, dir: File, deb: File): Boolean {
+        val r = runBlockingShort(rt, "dpkg-deb -c " + shQuote(deb.name) + " 2>/dev/null | head -4", dir)
+        return r.contains("data/data/com.termux/")
+    }
+
+    fun packageName(rt: RuntimeEngine, dir: File, deb: File): String = field(rt, dir, deb, "Package")
+
     /** 重新扫 localrepo，写 Packages / Release；返回 (可用索引?, 包名列表或错误)。 */
     fun rebuild(ctx: Context, rt: RuntimeEngine): Pair<Boolean, String> {
         val d = dir(ctx)
