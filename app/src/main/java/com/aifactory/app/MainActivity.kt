@@ -41,6 +41,7 @@ internal val Accent = Color(0xFFB66B45)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Thread { runCatching { RuntimeRepair.ensureUsr(applicationContext) } }.start()
         setContent {
             AIFactoryApp { command ->
                 RuntimeEngine(applicationContext).execute(command)
