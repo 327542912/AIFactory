@@ -63,7 +63,7 @@ fun GuideCard() {
                     fault("java ✗ 但 lib/jvm 里有文件", "四个依赖库没装或 postinst 没跑：dpkg -i 那四个库，再 dpkg --configure -a。")
                     fault("E: Unable to locate package X", "本地仓库里没有这个包，先把 deb 选进来，不是源坏了。")
                     fault("dpkg frontend lock ... held by pid", "有卡死的 apt/dpkg：cat /proc/<pid>/cmdline 确认后 kill -9，再删三个 lock 文件。")
-                    fault("apt 报 com.termux 前缀", "sources.list 被官方源覆盖了：echo 'deb [trusted=yes] file:///data/data/com.aifactory.app/files/localrepo ./' > $PREFIX/etc/apt/sources.list")
+                    fault("apt 报 com.termux 前缀", "sources.list 被官方源覆盖了：echo 'deb [trusted=yes] file:///data/data/com.aifactory.app/files/localrepo ./' > ${'$'}PREFIX/etc/apt/sources.list")
                     Text(
                         "提示：构建时若要边看进度，别用 tail（会缓冲到结束才输出）。用 nohup 写日志，另一标签 tail -f。",
                         fontSize = 11.sp, fontFamily = FontFamily.Monospace,
