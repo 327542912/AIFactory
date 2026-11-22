@@ -49,13 +49,24 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     private var session: TerminalSession? = null
     var title by mutableStateOf("bash")
 
+    private val scaledDensity = ctx.resources.displayMetrics.scaledDensity
+    private var fontPx = 13f * scaledDensity
+    private var scaleAcc = 1f
+
     fun attachView(v: TerminalView) {
         view = v
         v.setTerminalViewClient(this)
         v.isFocusable = true
         v.isFocusableInTouchMode = true
-        v.setTextSize((12 * ctx.resources.displayMetrics.scaledDensity).toInt())
+        v.setTextSize(fontPx.toInt())
         startSession().let { s -> v.attachSession(s) }
+    }
+
+    /** 双指缩放：只改字号并让 TerminalView 重算行列，进而通过 JNI 给 PTY 发 SIGWINCH。 */
+    fun zoomBy(step: Float) {
+        val v = view ?: return
+        fontPx = (fontPx * step).coerceIn(9f * scaledDensity, 26f * scaledDensity)
+        v.setTextSize(fontPx.toInt())
     }
 
     private fun startSession(): TerminalSession {
@@ -63,6 +74,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         val prefix = File(files, "usr")
         val home = File(files, "home")
         val ws = File(home, "projects").apply { mkdirs() }
+        val tmp = File(prefix, "tmp").apply { mkdirs() }
         val bash = File(prefix, "bin/bash")
         val env = arrayOf(
             "HOME=" + home.path,
@@ -72,7 +84,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
             "TERM=xterm-256color",
             "LANG=C.UTF-8",
             "LC_ALL=C.UTF-8",
-            "TMPDIR=" + File(files, "tmp").path,
+            "TMPDIR=" + tmp.path,
             "SHELL=" + bash.path
         )
         val s = TerminalSession(bash.path, ws.path, arrayOf("-l"), env, 3000, this)
@@ -140,7 +152,13 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     override fun logStackTrace(tag: String, e: Exception) {}
 
     // ---- TerminalViewClient ----
-    override fun onScale(scale: Float): Float = 1.0f
+    override fun onScale(scale: Float): Float {
+        // TerminalView 把累计缩放因子交进来；这里自己攒，跨过阈值才动字号，跨完清零
+        scaleAcc *= scale
+        if (scaleAcc >= 1.1f) { zoomBy(1.1f); scaleAcc = 1f }
+        else if (scaleAcc <= 0.9f) { zoomBy(1f / 1.1f); scaleAcc = 1f }
+        return 1.0f
+    }
     override fun onSingleTapUp(e: MotionEvent) {
         showKeyboard()
     }
