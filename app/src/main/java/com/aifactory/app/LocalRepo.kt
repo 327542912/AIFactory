@@ -74,6 +74,7 @@ object LocalRepo {
     fun packageName(rt: RuntimeEngine, dir: File, deb: File): String = field(rt, dir, deb, "Package")
 
     /** 重新扫 localrepo，写 Packages / Release；返回 (可用索引?, 包名列表或错误)。 */
+    @Synchronized
     fun rebuild(ctx: Context, rt: RuntimeEngine): Pair<Boolean, String> {
         val d = dir(ctx)
         val debs = d.listFiles { f -> f.isFile && f.name.endsWith(".deb") }?.sortedBy { it.name } ?: emptyList()
@@ -106,7 +107,11 @@ object LocalRepo {
             sb.append("Description: ").append(desc.replace('\n', ' ')).append("\n\n")
         }
         if (names.isEmpty()) return false to "无法读取 deb 的 control 字段（dpkg-deb 不可用？）"
-        File(d, "Packages").writeText(sb.toString())
+        // 原子替换：直接 writeText 会在 apt 正在读索引时留下半截文件，
+        // apt 就报 "Method gave a blank filename" 这种莫名错误
+        val pt = File(d, "Packages.tmp")
+        pt.writeText(sb.toString())
+        pt.renameTo(File(d, "Packages"))
         val release = buildString {
             append("Origin: AIFactory\n")
             append("Label: AIFactory Local\n")
@@ -120,7 +125,9 @@ object LocalRepo {
             fmt.timeZone = TimeZone.getTimeZone("GMT")
             append("Date: " + fmt.format(Date()) + "\n")
         }
-        File(d, "Release").writeText(release)
+        val rt2 = File(d, "Release.tmp")
+        rt2.writeText(release)
+        rt2.renameTo(File(d, "Release"))
         return true to names.joinToString(" ")
     }
 

@@ -48,7 +48,7 @@ fun PluginsPage() {
             ),
             PluginSpec(
                 "CMake / Native Build",
-                listOf("cmake", "ninja", "make"),
+                listOf("make"),
                 "原生构建用；编 Android native 还需要 NDK 与 sysroot。",
                 { p -> File(p, "bin/cmake").exists() }
             ),
@@ -60,8 +60,8 @@ fun PluginsPage() {
             ),
             PluginSpec(
                 "Python Runtime",
-                listOf("python"),
-                "Python 3.12 已在自建源编好，装完 bin/python 即用。",
+                listOf("python", "gdbm", "libandroid-posix-semaphore", "libcrypt", "libffi", "libsqlite", "ncurses-ui-libs"),
+                "Python 3.12 已在自建源编好。依赖 gdbm/libsqlite/libffi 等 7 个包必须先在“文件”页选进来，插件页只从本地仓库装。",
                 { p -> File(p, "bin/python").exists() }
             )
         )

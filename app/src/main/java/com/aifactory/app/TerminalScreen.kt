@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -305,12 +307,19 @@ fun TerminalPage(bridge: AiTerminalBridge, dark: Boolean = false, onGoSettings: 
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text("AIFactory Runtime", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text(title, fontSize = 10.sp, color = Muted)
+                Text(
+                    "AIFactory Runtime",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 0.3.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(title, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Muted)
             }
-            TextButton(onClick = { bridge.restart() }) { Text("重开会话", fontSize = 12.sp) }
-            TextButton(onClick = { bridge.pasteFromClipboard() }) { Text("粘贴", fontSize = 12.sp) }
+            TextButton(onClick = { bridge.restart() }) { Text("重开会话", fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+            TextButton(onClick = { bridge.pasteFromClipboard() }) { Text("粘贴", fontSize = 12.sp, fontWeight = FontWeight.Medium) }
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         Box(Modifier.fillMaxWidth().weight(1f)) {
             AndroidView(
