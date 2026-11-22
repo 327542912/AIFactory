@@ -1,8 +1,5 @@
 # AIFactory
 
-> **📦 只想拿文件？** → **[下载总入口 / All downloads](https://github.com/327542912/AIFactory/releases/tag/downloads)** —— APK、Runtime bootstrap、Android SDK、Gradle 8.7 的直链、体积、sha256 全在这一页。
-> 仓库里几个 release tag 各自只装一个文件，找不到东西时从这一页进。
-
 **Android 上的自建 AI 开发工作台。不依赖 Termux，不用 proot，不复制 rootfs —— 整套 Linux 运行环境是从源码编译出来的，只把前缀里的包名换成了自己的。**
 
 [![Runtime CI](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml/badge.svg?branch=master)](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml)
@@ -12,8 +9,8 @@
 ![runtime](https://img.shields.io/badge/runtime-Termux%20fork%20(no%20proot)-orange)
 
 <p align="center">
-  <img src="docs/images/settings.webp" width="360" alt="AIFactory 设置页">
-</p>
+  <img src="docs/images/settings.png" width="360" alt="AIFactory 设置页">
+</div>
 
 ---
 
@@ -26,7 +23,7 @@
 | 项 | 值 |
 |---|---|
 | 应用包名 / applicationId | `com.aifactory.app` |
-| 当前版本 | `0.2.2`（versionCode 5） |
+| 当前版本 | `0.2.7`（versionCode 10） |
 | `targetSdk` | **28**（硬性上限，见下） |
 | `minSdk` / `compileSdk` | 26 / 34 |
 | Runtime 前缀 | `/data/data/com.aifactory.app/files/usr` |
@@ -47,15 +44,24 @@ proot 靠 `ptrace` 拦截每个系统调用做路径重写，代价是：每次�
 
 ### 1. 安装 App
 
-从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 下载 `AIFactory-0.2.2-debug.apk`（debug 签名，仅供自用）。
+从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 或仓库内 [`apk/AIFactory-latest.apk`](apk/AIFactory-latest.apk) 下载（debug 签名，仅供自用）：
 
 ```text
-https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-0.2.2-debug.apk
+https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-latest.apk
 ```
+
+**覆盖安装，不要卸载。** 卸载会删掉 `/data/data/com.aifactory.app/files`，Runtime 和 SDK 全要重来。
+签名从 0.2.3 起固定为同一张证书（SHA-256 `05fc565e9bc34b4b69806123a993fd12bbd03b42ddde56238090e7820c2fff0b`），
+2.3 → 2.4 → 2.5 → 2.6 → 2.7 都能原地升级。
 
 ### 2. 安装 Runtime
 
-打开 App → **设置** → 第 1 张卡「安装 Runtime」，地址默认已填好，直接点「下载并安装」（约 29.6 MB，解压后 3200+ 文件、1100+ 软链）。
+打开 App → **设置** → 第 1 张卡「安装 Runtime」，地址默认已填好，直接点「下载并安装」（29.6 MB，解压后 3200+ 文件、1100+ 软链）。
+
+- 下载器会手动跟 GitHub 的 302 跳转、带 UA、按 HTTP Range 断点续传（最多 5 次），残包留在缓存里，再点一次接着下。
+- 网络实在拉不动：用浏览器下 zip，然后点「选择本地 zip」导入，效果完全一样。
+- 带宽差可以在第 1 张卡上方的「下载加速前缀」里填 `https://ghproxy.net`，会变成 `https://ghproxy.net/https://github.com/…`；
+  只代理一层 URL，不改文件内容，sha256 仍按原文件校验。
 
 ### 3. 接入自建 apt 源
 
@@ -65,16 +71,45 @@ https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-0.
 deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runtime-repo/ ./
 ```
 
+新的 bootstrap 里 `sources.list` 已经写好**两条**源（主源 + `runtime-extra`），装完 `pkg update` 直接可用。
+老 bootstrap（本仓库 2026-11-22 之前发布的）只有一条，需要自己补：
+
+```bash
+echo 'deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runtime-extra/ ./' \
+  >> $PREFIX/etc/apt/sources.list
+```
+
 `Ign ... InRelease` 是平铺源 + `[trusted=yes]` 的正常现象，不是错误。
+
+**手工增删 `runtime-repo` 里的 deb 时**，`Packages` / `Packages.gz` / `Release` 必须一起重建：只换索引不换 `Release`，
+apt 会报 `File has unexpected size (40057 != 40531). Mirror sync in progress?` 然后拒收（这个坑本仓库踩过）。
+仓库里 `scripts/regen-repo-index.sh` 就是干这个的。
 
 ### 4. 装工具链
 
-终端里：
+三条路，按带宽选一条。
+
+**A. 源正常（apt 能跑到 1 MB/s 以上）**
 
 ```bash
-# JDK / git / apksigner / zip / unzip 来自主源
 pkg install -y openjdk-21 git apksigner zip unzip
 ```
+
+**B. 带宽很差（`apt update` 只有几 KB/s）**
+
+JDK 是 105.7 MB，按 7 KB/s 要下四个小时，别用 apt。用浏览器/电脑把 deb 下到手机，再让 App 装：
+
+```text
+https://github.com/327542912/AIFactory/releases/download/runtime-repo/openjdk-21_21.0.8-1_aarch64.deb     105.7 MB
+https://github.com/327542912/AIFactory/releases/download/runtime-repo/openjdk-21-x_21.0.8-1_aarch64.deb    12.5 MB
+```
+
+App → 设置 → 第 4 张卡「本地安装包（.deb）」→「选择本地 .deb」，**两个一起多选**。
+它执行的是 `apt install -y ./xxx.deb`，缺的依赖（`ca-certificates-java` 之类，几百 KB）从软件源补。
+
+**C. 用加速前缀**：设置页第 1 张卡上方填 `https://ghproxy.net`，软件源地址也可以改写成
+`https://ghproxy.net/https://github.com/327542912/AIFactory/releases/download/runtime-repo/`，
+apt 的索引和 deb 都会走代理。
 
 **Gradle 别直接 `pkg install gradle`**——主源的 `gradle` 配方是 `1.9.0.0`（2014 年的 Gradle 1.9），
 在 JDK 21 上起不来，更别说驱动 AGP 8.6。Gradle 8.7 单独放在补充源里：
@@ -196,7 +231,7 @@ JDK 21 (temurin) + `setup-android` + `sdkmanager platforms;android-34 build-tool
 |---|---|---|
 | `main`（默认分支） | 只有 README + 文档 | 仓库门面；`workflow_dispatch` 要求 workflow 文件在默认分支 |
 | `master` | runtime 构建流水线 + 补丁脚本 | 真正的 CI |
-| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK |
+| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK。**分支名沿用历史，代码已是 0.2.7** |
 | `aifactory-*` | 历史快照 | 存档，App 仍为 0.1.0 / targetSdk 34，**不要直接用** |
 
 Key 文件：
@@ -227,10 +262,7 @@ app/src/main/java/com/aifactory/app/
 | [`runtime-extra`](https://github.com/327542912/AIFactory/releases/tag/runtime-extra) | `gradle_8.7-1_all.deb` + `Packages`（手动维护） | `gradle 1.9.0.0` 替代品，131,417,012 B，sha256 `027493b1…3ce09`；流水线不碰它 |
 | [`downloads`](https://github.com/327542912/AIFactory/releases/tag/downloads) | `DOWNLOAD.md`（下载总表） | 四个大文件的直链 + sha256 + 装法，不含二进制 |
 | [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 143,210,636 B，sha256 `70d10e0a…6faa3`（3 个 platform + 3 个 build-tools + arm64 adb） |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.5-debug.apk` + `.sha256` | 覆盖升级用固定签名 |
-
-> **手工改 `runtime-repo` 的注意事项**：增删 deb 后 `Packages` / `Packages.gz` / `Release` 必须一起重建 —— 只换索引不换 `Release`，apt 会直接拒收并报
-> `File has unexpected size (40057 != 40531). Mirror sync in progress?`。仓库里 `scripts/regen-repo-index.sh` 就是干这个的。
+| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.2.7-debug.apk` + `AIFactory-latest.apk` + 各自 `.sha256` | 覆盖升级用固定签名；每次构建自动替换 |
 
 资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
 
@@ -269,11 +301,11 @@ app/src/main/java/com/aifactory/app/
 
 - [x] 源码重编的 ARM64 bootstrap（自建前缀，已发布）
 - [x] 自建 apt 源（`pkg install` 可用）
-- [x] App 0.2.2：`targetSdk 28`、版本号读 `BuildConfig`、插件页数据驱动
+- [x] App 0.2.7：`targetSdk 28`、版本号读 `BuildConfig`、插件页数据驱动、下载器断点续传、加速前缀、本地 deb 安装
 - [x] JDK 21 / git / apksigner / zip / unzip 进 `runtime-repo`（264 个 deb，前缀全部核对过 0 处 `com.termux`）
 - [x] Gradle 8.7 走独立 `runtime-extra` 源（绕开主源的 1.9.0.0）
 - [x] Android SDK 单一 zip 覆盖 34/35/36 + arm64 adb
-- [x] 固定签名 keystore：0.2.3 / 0.2.4 / 0.2.5 指纹一致，可覆盖升级不丢 `/data/data` 数据
+- [x] 固定签名 keystore：0.2.3 → 0.2.7 指纹一致（`05fc565e…`），可覆盖升级不丢 `/data/data` 数据
 - [x] `scripts/device-build.sh`：设备端构建 → 验签 → 安装（Shizuku）→ 启动 → 扫 `FATAL EXCEPTION`
 - [ ] 设备端真跑通一次 `gradle assembleDebug`（脚本已就位，等你手机上跑）
 - [ ] arm64 版 Android SDK 打包
