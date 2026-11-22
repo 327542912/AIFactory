@@ -54,6 +54,10 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         private set
     @Volatile private var finished = true
 
+    /** 非空表示没有可用会话（例如 prefix 里的 bash 缺失），UI 直接展示这句话并给重装入口。 */
+    @Volatile var problem: String? = null
+        private set
+
     private val scaledDensity = ctx.resources.displayMetrics.scaledDensity
     private var fontPx = 13f * scaledDensity
     private var scaleAcc = 1f
@@ -65,7 +69,10 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         v.isFocusableInTouchMode = true
         v.setTextSize(fontPx.toInt())
         val s = session?.takeIf { !finished } ?: startSession()
+        if (s == null) return
         v.attachSession(s)
+        v.requestFocus()
+        v.post { v.requestFocus() }
     }
 
     /** 离开终端页只解绑视图，bash 会话继续活着，回来时 attachSession 会把整屏缓冲重新画出来。 */
@@ -80,13 +87,20 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         v.setTextSize(fontPx.toInt())
     }
 
-    private fun startSession(): TerminalSession {
+    private fun startSession(): TerminalSession? {
         val files = ctx.filesDir
         val prefix = File(files, "usr")
         val home = File(files, "home")
         val ws = File(home, "projects").apply { mkdirs() }
         val tmp = File(prefix, "tmp").apply { mkdirs() }
         val bash = File(prefix, "bin/bash")
+        if (!bash.exists()) {
+            problem = "找不到 " + bash.path + "。Runtime 不完整（可能是 bootstrap 只装了一半，或被官方 termux 源污染的包替换过）。到「设置」第 1 张卡点「选择本地 zip」，选 bootstrap-aarch64.zip 重装 Runtime；home/ 里的项目和 SDK 不会丢，usr 里的 apt 包需要重装。"
+            finished = true
+            currentTitle = "Runtime 不完整"
+            return null
+        }
+        problem = null
         val env = arrayOf(
             "HOME=" + home.path,
             "PREFIX=" + prefix.path,
@@ -126,7 +140,8 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
 
     fun restart() {
         close()
-        view?.let { v -> startSession().let { v.attachSession(it) } } ?: startSession()
+        val v = view ?: return
+        startSession()?.let { v.attachSession(it) }
     }
 
     fun close() {
@@ -191,7 +206,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
 }
 
 @Composable
-fun TerminalPage(bridge: AiTerminalBridge) {
+fun TerminalPage(bridge: AiTerminalBridge, onGoSettings: () -> Unit = {}) {
     // 每秒轮询一次标题，避免 onTextChanged 每行输出都触发重组
     val title by produceState(initialValue = bridge.currentTitle) {
         while (true) {
@@ -200,6 +215,9 @@ fun TerminalPage(bridge: AiTerminalBridge) {
         }
     }
     DisposableEffect(Unit) { onDispose { bridge.detachView() } }
+    val problem by produceState(initialValue = bridge.problem) {
+        while (true) { value = bridge.problem; kotlinx.coroutines.delay(500) }
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -212,6 +230,16 @@ fun TerminalPage(bridge: AiTerminalBridge) {
             }
             TextButton(onClick = { bridge.restart() }) { Text("重开会话", fontSize = 12.sp) }
             TextButton(onClick = { bridge.pasteFromClipboard() }) { Text("粘贴", fontSize = 12.sp) }
+        }
+
+        problem?.let { msg ->
+            Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)) {
+                Text(msg, fontSize = 12.sp, color = Color(0xFFB4553C))
+                Row(Modifier.padding(top = 6.dp)) {
+                    TextButton(onClick = onGoSettings) { Text("去设置重装 Runtime", fontSize = 12.sp) }
+                    TextButton(onClick = { bridge.restart() }) { Text("已重装，重试", fontSize = 12.sp) }
+                }
+            }
         }
 
         AndroidView(
