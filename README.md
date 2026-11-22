@@ -1,5 +1,8 @@
 # AIFactory
 
+> **📦 只想拿文件？** → **[下载总入口 / All downloads](https://github.com/327542912/AIFactory/releases/tag/downloads)** —— APK、Runtime bootstrap、Android SDK、Gradle 8.7 的直链、体积、sha256 全在这一页。
+> 仓库里另外几个 release tag 各自只是其中一个文件，找不到东西时从这一页进。
+
 **Android 上的自建 AI 开发工作台。不依赖 Termux，不用 proot，不复制 rootfs —— 整套 Linux 运行环境是从源码编译出来的，只把前缀里的包名换成了自己的。**
 
 [![Runtime CI](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml/badge.svg?branch=master)](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml)
@@ -9,8 +12,8 @@
 ![runtime](https://img.shields.io/badge/runtime-Termux%20fork%20(no%20proot)-orange)
 
 <p align="center">
-  <img src="docs/images/settings.png" width="360" alt="AIFactory 设置页">
-</div>
+  <img src="docs/images/settings.webp" width="360" alt="AIFactory 设置页">
+</p>
 
 ---
 
