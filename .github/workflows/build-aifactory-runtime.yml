@@ -14,6 +14,10 @@ on:
         description: "额外打进 bootstrap 的包（逗号分隔；留空 = 只构建基础 bootstrap）"
         required: false
         default: "openjdk-21,gradle,apksigner,git,zip,unzip"
+      skip_bootstrap:
+        description: "跳过 bootstrap 编译，只打 apt 源（复用已发布的 zip），用于快速迭代额外包"
+        required: false
+        default: "false"
       repo_packages:
         description: "额外构建并发布到 apt 软件源的包（逗号分隔，供 pkg install 使用；留空 = 跳过）"
         required: false
@@ -212,6 +216,16 @@ jobs:
           sed -i 's|https://nano-editor.org/dist/latest/|https://ftp.gnu.org/gnu/nano/|' packages/nano/build.sh
           grep -n 'TERMUX_PKG_SRCURL=' packages/dos2unix/build.sh packages/nano/build.sh
 
+      - name: Fix CMake policy minimum for old recipes
+        run: |
+          f=termux-packages/scripts/build/configure/termux_step_configure_cmake.sh
+          if grep -q CMAKE_POLICY_VERSION_MINIMUM "$f"; then
+            echo "already patched"
+          else
+            sed -i 's/local CMAKE_ADDITIONAL_ARGS=()/local CMAKE_ADDITIONAL_ARGS=("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")/' "$f"
+            grep -n "CMAKE_POLICY_VERSION_MINIMUM" "$f"
+          fi
+
       - name: Preflight verify source hashes
         env:
           EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages || 'openjdk-21,gradle,apksigner,git,zip,unzip' }}
@@ -268,6 +282,7 @@ jobs:
           docker build -t ghcr.io/termux/package-builder ./scripts
 
       - name: Build ARM64 bootstrap
+        if: github.event.inputs.skip_bootstrap != 'true'
         env:
           EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages || 'openjdk-21,gradle,apksigner,git,zip,unzip' }}
         run: |
@@ -303,6 +318,7 @@ jobs:
           unzip -t "$ZIP" | tail -2
 
       - name: Normalize bootstrap prefix leftovers
+        if: github.event.inputs.skip_bootstrap != 'true'
         env:
           RUNTIME_REPO_URL: https://github.com/${{ github.repository }}/releases/download/runtime-repo/
         run: |
@@ -315,6 +331,7 @@ jobs:
           fi
 
       - name: Locate bootstrap
+        if: github.event.inputs.skip_bootstrap != 'true'
         working-directory: .
         run: |
           set -x
@@ -331,6 +348,7 @@ jobs:
           sha256sum bootstrap-aarch64.zip
 
       - name: Verify bootstrap
+        if: github.event.inputs.skip_bootstrap != 'true'
         run: |
           set -e
           ZIP=termux-packages/bootstrap-aarch64.zip
@@ -354,7 +372,7 @@ jobs:
           rm -rf pfxprobe
 
       - name: Upload runtime artifact
-        if: always()
+        if: always() && github.event.inputs.skip_bootstrap != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: aifactory-runtime-aarch64
@@ -363,7 +381,7 @@ jobs:
           retention-days: 14
 
       - name: Publish release (stable download URL)
-        if: always()
+        if: always() && github.event.inputs.skip_bootstrap != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
