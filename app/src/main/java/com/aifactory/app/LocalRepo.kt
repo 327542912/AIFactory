@@ -3,6 +3,10 @@ package com.aifactory.app
 import android.content.Context
 import java.io.File
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 /**
  * 设备本地 flat apt 仓库。
@@ -111,6 +115,10 @@ object LocalRepo {
             append("Architectures: aarch64 all\n")
             append("Components: main\n")
             append("Description: 设备本地离线包\n")
+            // apt 要 RFC2822 的 Date，缺了或格式不对就报 Invalid 'Date' entry
+            val fmt = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
+            fmt.timeZone = TimeZone.getTimeZone("GMT")
+            append("Date: " + fmt.format(Date()) + "\n")
         }
         File(d, "Release").writeText(release)
         return true to names.joinToString(" ")
