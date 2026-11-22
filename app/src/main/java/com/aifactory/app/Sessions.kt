@@ -26,9 +26,7 @@ import java.io.File
  * 现在状态挂在进程级对象上，页面只是视图；聊天记录还会落盘到 home/.aifactory/chat.json，重启也在。
  */
 
-fun tailText(s: String, max: Int): String = if (s.length <= max) s else "…\n" + s.substring(s.length - max)
-
-object ChatRunner {
+internal object ChatRunner {
     const val HELLO = "你好，我是 AIFactory。描述你想构建的软件，我们从需求分析和工程规划开始。"
 
     val messages = mutableStateListOf<ChatMessage>()
@@ -126,7 +124,7 @@ object ChatRunner {
 }
 
 /** 插件安装跑在进程级协程里：切页面不取消，日志留在 PluginRunner.log。 */
-object PluginRunner {
+internal object PluginRunner {
     // Compose 状态：只在主线程写，UI 直接读即可响应
     var running by mutableStateOf("")
         private set
@@ -185,7 +183,7 @@ object PluginRunner {
 }
 
 /** Runtime / SDK / deb 的安装任务也挂在进程级：切页面不会取消安装，进度条和结果不会消失。 */
-object SetupRunner {
+internal object SetupRunner {
     var progress by mutableStateOf("")
         private set
     var busy by mutableStateOf(false)
