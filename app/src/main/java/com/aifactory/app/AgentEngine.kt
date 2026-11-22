@@ -274,7 +274,7 @@ class AgentEngine(private val ctx: Context) {
         } finally { conn?.disconnect() }
     }
 
-    /** 反编译 APK：没有 jadx 就自己下官方包（zip 里的 lib/*.jar 用 java -cp 跑）。 */
+    /** 反编译 APK：没有 jadx 就自己下官方包（zip 里的 lib 目录 jar 用 java -cp 跑）。 */
     private suspend fun decompileApk(ctx: Context, apkPath: String, outArg: String): String = withContext(Dispatchers.IO) {
         val apk = resolve(apkPath)
         if (!apk.exists()) return@withContext "找不到 APK：" + apkPath
