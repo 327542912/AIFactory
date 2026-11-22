@@ -6,6 +6,8 @@ import android.content.Context
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,8 +16,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,11 +30,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -101,6 +108,9 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     /** 非空表示没有可用会话（例如 prefix 里的 bash 缺失），UI 直接展示这句话并给重装入口。 */
     @Volatile var problem: String? = null
         private set
+
+    /** 标签页需要知道这条会话是不是已经退出。 */
+    fun isFinished(): Boolean = finished
 
     private val scaledDensity = ctx.resources.displayMetrics.scaledDensity
     private var fontPx = 13f * scaledDensity
@@ -286,8 +296,43 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     override fun onEmulatorSet() {}
 }
 
+/**
+ * 多会话宿主：一个标签 = 一个独立的 AiTerminalBridge = 一条独立的 bash/PTY。
+ * 之所以不在一份会话里切 view，是因为每条会话要保留自己的屏幕缓冲、环境与工作目录，
+ * 共用一份反而会互相污染（cwd、环境变量、前台进程都只有一份）。
+ */
+class TerminalHost(private val ctx: Context) {
+    private val bridges = ArrayList<AiTerminalBridge>()
+
+    var active by mutableStateOf(0)
+        private set
+
+    init { bridges += AiTerminalBridge(ctx) }
+
+    fun all(): List<AiTerminalBridge> = bridges
+    fun count(): Int = bridges.size
+    fun select(i: Int) { if (i in bridges.indices) active = i }
+
+    fun add() {
+        bridges += AiTerminalBridge(ctx)
+        active = bridges.size - 1
+    }
+
+    fun close(i: Int) {
+        if (i !in bridges.indices) return
+        bridges[i].close()
+        bridges.removeAt(i)
+        if (bridges.isEmpty()) bridges += AiTerminalBridge(ctx)
+        active = active.coerceIn(0, bridges.size - 1)
+    }
+
+    fun cur(): AiTerminalBridge = bridges[active.coerceIn(0, bridges.size - 1)]
+}
+
 @Composable
-fun TerminalPage(bridge: AiTerminalBridge, dark: Boolean = false, onGoSettings: () -> Unit = {}) {
+fun TerminalPage(host: TerminalHost, dark: Boolean = false, onGoSettings: () -> Unit = {}) {
+    val active = host.active
+    val bridge = host.cur()
     // 每秒轮询一次标题，避免 onTextChanged 每行输出都触发重组
     val title by produceState(initialValue = bridge.currentTitle) {
         while (true) {
@@ -295,8 +340,9 @@ fun TerminalPage(bridge: AiTerminalBridge, dark: Boolean = false, onGoSettings: 
             kotlinx.coroutines.delay(1000)
         }
     }
-    DisposableEffect(Unit) { onDispose { bridge.detachView() } }
-    LaunchedEffect(dark) { bridge.setDark(dark) }
+    DisposableEffect(Unit) { onDispose { host.all().forEach { it.detachView() } } }
+    LaunchedEffect(dark) { host.all().forEach { it.setDark(dark) } }
+    LaunchedEffect(active) { bridge.setDark(dark) }
     val problem by produceState(initialValue = bridge.problem) {
         while (true) { value = bridge.problem; kotlinx.coroutines.delay(500) }
     }
@@ -321,13 +367,50 @@ fun TerminalPage(bridge: AiTerminalBridge, dark: Boolean = false, onGoSettings: 
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        Box(Modifier.fillMaxWidth().weight(1f)) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { c: Context ->
-                    TerminalView(c, null).also { v -> bridge.attachView(v) }
+        // 标签栏：切标签、关标签、新建。标签各自独立，互不干扰。
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            host.all().forEachIndexed { i, b ->
+                val sel = i == active
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(9.dp))
+                        .clickable { host.select(i) }
+                        .background(if (sel) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
+                        .padding(start = 10.dp, end = 2.dp, top = 2.dp, bottom = 2.dp)
+                ) {
+                    Text(
+                        (if (b.isFinished()) "已退出 " else "bash ") + (i + 1),
+                        fontSize = 12.sp,
+                        fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (b.isFinished()) Color(0xFFB4553C) else MaterialTheme.colorScheme.onSurface
+                    )
+                    if (host.count() > 1) {
+                        TextButton(
+                            onClick = { host.close(i) },
+                            contentPadding = PaddingValues(0.dp),
+                            modifier = Modifier.size(26.dp)
+                        ) { Text("×", fontSize = 13.sp, color = Muted) }
+                    }
                 }
-            )
+            }
+            TextButton(onClick = { host.add() }) { Text("+ 新标签", fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            key(active) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { c: Context ->
+                        TerminalView(c, null).also { v -> bridge.attachView(v) }
+                    }
+                )
+            }
             if (problem != null) {
                 Column(
                     Modifier.fillMaxSize().padding(18.dp),
