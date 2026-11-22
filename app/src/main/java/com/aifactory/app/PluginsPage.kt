@@ -35,6 +35,7 @@ fun PluginsPage() {
     val ctx = LocalContext.current
     val rt = remember { RuntimeEngine(ctx) }
     val prefix = remember { RuntimePaths.prefix(ctx) }
+    val cfg = remember { AppConfig(ctx) }
     val scope = rememberCoroutineScope()
 
     val specs = remember {
@@ -42,8 +43,8 @@ fun PluginsPage() {
             PluginSpec(
                 "Gradle / Android Build",
                 listOf("openjdk-21", "gradle", "apksigner", "zip", "unzip"),
-                "装完 java/gradle/apksigner 三个叉会变勾。编 APK 还差 arm64 版 aapt2 和 Android SDK。",
-                { p -> File(p, "bin/java").exists() && File(p, "bin/gradle").exists() }
+                "openjdk-21 + Gradle 8.7 + apksigner；Gradle 走补充源。编 APK 还差 arm64 版 aapt2 和 Android SDK。",
+                { p -> File(p, "bin/java").exists() && File(p, "opt/gradle-8.7/bin/gradle").exists() }
             ),
             PluginSpec(
                 "CMake / Native Build",
@@ -86,7 +87,19 @@ fun PluginsPage() {
         scope.launch {
             val hasPkg = File(prefix, "bin/pkg").exists()
             val pm = if (hasPkg) "pkg" else "apt"
-            val cmd = "$pm install -y ${spec.packages.joinToString(" ")} 2>&1"
+            var pre = ""
+            // Gradle 装在补充源里（apt 主源那份是 1.9.0.0，跑不动 AGP 8 工程）
+            if (spec.packages.any { it.startsWith("gradle") }) {
+                val sl = File(prefix, "etc/apt/sources.list")
+                val extra = cfg.extraRepoUrl
+                try {
+                    if (sl.exists() && !sl.readText().contains("runtime-extra")) {
+                        sl.appendText("\n# 补充源：Gradle 8.7 等\ndeb [trusted=yes] $extra ./\n")
+                    }
+                } catch (_: Throwable) {}
+                pre = "$pm update -y >/dev/null 2>&1; "
+            }
+            val cmd = "${pre}$pm install -y ${spec.packages.joinToString(" ")} 2>&1"
             val sb = StringBuilder()
             val r = try {
                 rt.run(cmd, RuntimePaths.home(ctx), 3600) { chunk ->

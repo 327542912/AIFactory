@@ -72,6 +72,11 @@ class AppConfig(context: Context) {
         get() = get("sdk_url", "https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip")
         set(v) = put("sdk_url", v)
 
+    /** 主流水线之外的补充 apt 源（Gradle 8.7 等）；重建 runtime-repo 不会覆盖。 */
+    var extraRepoUrl: String
+        get() = get("extra_repo_url", "https://github.com/327542912/AIFactory/releases/download/runtime-extra/")
+        set(v) = put("extra_repo_url", v)
+
     /** 发布签名密钥口令：首次使用时随机生成，只保存在应用私有存储。 */
     val keystorePassword: String
         get() {

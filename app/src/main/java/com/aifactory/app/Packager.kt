@@ -56,7 +56,12 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         val m = ArrayList<String>()
         if (!hasFile("bin/java") && !hasFile("opt/openjdk/bin/java")) m += "JDK（java）"
         val hasWrapper = projectDir != null && File(projectDir, "gradlew").exists()
-        if (!hasFile("bin/gradle") && !hasWrapper) m += "gradle"
+        if (!hasFile("bin/gradle") && !hasWrapper) {
+            m += "gradle"
+        } else if (!hasWrapper && !hasFile("opt/gradle-8.7/bin/gradle")) {
+            // apt 源里的 gradle 配方是 1.9.0.0，跑不动 AGP 8.x
+            m += "Gradle 8.x（当前不是 8.7，1.9 无法构建 AGP 8 工程）"
+        }
         if (!File(sdk, "platforms").isDirectory) m += "Android SDK（platforms）"
         if (aapt2Path() == null) m += "aapt2"
         return m
@@ -108,10 +113,12 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
 
         val gradle = if (hasFile("bin/gradle")) "gradle" else "sh ./gradlew"
         val task = if (release) "assembleRelease" else "assembleDebug"
+        // AGP 默认从 Maven 拉 x86_64 的 aapt2，手机上执行不了；强制用 SDK 里的 aarch64 aapt2。
+        val aapt2Arg = aapt2Path()?.let { "-Pandroid.aapt2FromMavenOverride=${shQuote(it)}" } ?: ""
         val started = System.currentTimeMillis()
         val r = rt.run(
-            "$gradle $task --no-daemon --console=plain --max-workers=2",
-            root, 3600, emptyMap(), onOutput
+            "$gradle $task $aapt2Arg --no-daemon --console=plain --max-workers=2",
+            root, 3600, mapOf("ANDROID_HOME" to sdk.path, "ANDROID_SDK_ROOT" to sdk.path), onOutput
         )
         if (r.cancelled) return BuildResult(false, null, "构建已取消。", r.output)
         if (r.timedOut) return BuildResult(false, null, "构建超时（60 分钟）。", r.output)
