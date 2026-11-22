@@ -18,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.Locale
 
 data class FileRecord(
@@ -226,13 +227,15 @@ fun FileCenterPage(
 
 
 /** 把 SAF 里选中的文件真正拷进 ~/projects（终端能直接用）。返回 null 表示成功。 */
-fun copyFileToProjects(context: android.content.Context, record: FileRecord): String? = try {
-    val ws = RuntimePaths.workspace(context).apply { mkdirs() }
-    val out = File(ws, record.name)
-    context.contentResolver.openInputStream(android.net.Uri.parse(record.uri))?.use { ins ->
-        out.outputStream().use { ins.copyTo(it, 1 shl 16) }
-    } ?: return "打不开源文件（授权可能已失效，重新导入一次）"
-    null
-} catch (e: Throwable) {
-    e.message ?: "复制失败"
+fun copyFileToProjects(context: android.content.Context, record: FileRecord): String? {
+    return try {
+        val ws = RuntimePaths.workspace(context).apply { mkdirs() }
+        val out = File(ws, record.name)
+        val ins = context.contentResolver.openInputStream(android.net.Uri.parse(record.uri))
+            ?: return "打不开源文件（授权可能已失效，重新导入一次）"
+        ins.use { input -> out.outputStream().use { input.copyTo(it, 1 shl 16) } }
+        null
+    } catch (e: Throwable) {
+        e.message ?: "复制失败"
+    }
 }
