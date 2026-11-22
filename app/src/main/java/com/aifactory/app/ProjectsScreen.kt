@@ -69,6 +69,12 @@ fun ProjectsScreen() {
     val scope = rememberCoroutineScope()
     var projects by remember { mutableStateOf(listProjects(rt)) }
     var selected by remember { mutableStateOf<String?>(null) }
+    // 新建项目向导：方向 → 名字 → 需求 → PRD 预览 → 确认创建
+    var showNew by remember { mutableStateOf(false) }
+    var kind by remember { mutableStateOf(ProjectScaffold.Kind.APP) }
+    var newName by remember { mutableStateOf("") }
+    var newBrief by remember { mutableStateOf("") }
+    var prdPreview by remember { mutableStateOf<String?>(null) }
     // 日志/忙碌/产物全部来自进程级 Pipeline：切页不丢、不取消
     val log = Pipeline.log
     val busy = Pipeline.busy
@@ -127,8 +133,65 @@ fun ProjectsScreen() {
             fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { showNew = !showNew; prdPreview = null }) { Text("＋ 新建项目") }
             OutlinedButton(onClick = { importer.launch(arrayOf("*/*")) }) { Text("导入源码包") }
             OutlinedButton(onClick = { projects = listProjects(rt) }) { Text("刷新") }
+        }
+        if (showNew) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("新建项目", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                    Text("1) 选择方向", color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f), fontSize = 11.sp)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(ProjectScaffold.Kind.values().toList()) { k ->
+                            FilterChip(selected = kind == k, onClick = { kind = k; prdPreview = null },
+                                label = { Text(k.label, fontSize = 11.sp) })
+                        }
+                    }
+                    OutlinedTextField(newName, { newName = it; prdPreview = null },
+                        label = { Text("2) 项目名字（英文/数字/下划线，会作为包名）") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(newBrief, { newBrief = it; prdPreview = null },
+                        label = { Text("3) 需求描述：做什么、给谁用、要什么功能") },
+                        minLines = 3, modifier = Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(enabled = newName.isNotBlank(), onClick = {
+                            prdPreview = ProjectScaffold.prd(kind, newName.trim(), newBrief)
+                        }) { Text("生成需求文档") }
+                        Button(enabled = newName.isNotBlank(), onClick = {
+                            val nm = ProjectScaffold.slug(newName)
+                            val existing = File(rt.workspace, nm).exists()
+                            if (existing) {
+                                Pipeline.appendNote("项目 $nm 已存在，换一个名字再建，避免覆盖你的代码。")
+                            } else {
+                                val made = ProjectScaffold.create(rt.workspace, nm, kind, newBrief)
+                                projects = listProjects(rt)
+                                selected = nm
+                                Pipeline.appendNote("已创建 $nm（${kind.label}）：" + made.joinToString(", "))
+                                showNew = false
+                                prdPreview = null
+                                if (kind == ProjectScaffold.Kind.APP) {
+                                    Pipeline.buildProject(ctx, pk, File(rt.workspace, nm), false)
+                                } else {
+                                    Pipeline.appendNote("非 Android 方向不进入 APK 构建；骨架与 PRD.md 已生成，可在文件页修改。")
+                                }
+                            }
+                        }) { Text(if (kind == ProjectScaffold.Kind.APP) "创建并构建 APK" else "创建项目") }
+                        TextButton(onClick = { showNew = false; prdPreview = null }) { Text("取消") }
+                    }
+                    prdPreview?.let { text ->
+                        HorizontalDivider()
+                        Column(Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                            Text(text, fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 17.sp)
+                        }
+                        TextButton(onClick = {
+                            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("prd", text))
+                            Pipeline.appendNote("PRD 已复制到剪贴板")
+                        }) { Text("复制 PRD") }
+                    }
+                }
+            }
         }
         if (projects.isEmpty()) {
             Text("工作区还没有项目。导入 zip / tar.gz 源码包，或在对话里让 Agent 创建。", fontSize = 13.sp)
