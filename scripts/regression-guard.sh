@@ -43,7 +43,7 @@ need AgentEngine.kt "(2 * n).coerceAtMost(20)" "R-21"
 need AgentEngine.kt "historyBudget" "R-22"
 need AgentEngine.kt "早前对话摘要" "R-22"
 VC=$(sed -nE 's/.*versionCode = ([0-9]+).*/\1/p' app/build.gradle.kts)
-if [ "${VC:-0}" -ge 75 ]; then
+if [ "${VC:-0}" -ge 76 ]; then
   echo "  ok   R-23  app/build.gradle.kts  ~ versionCode=$VC 已真改"
 else
   echo "  FAIL R-23  app/build.gradle.kts  versionCode=$VC 没升（缩进坑）"; fail=1
@@ -53,4 +53,8 @@ need AgentEngine.kt "不支持 AAR / Gradle 依赖解析" "R-25"
 need AgentEngine.kt "自绘 Canvas" "R-25"
 need AgentEngine.kt "code == -1" "R-26"
 need Packager.kt "ensureIcons(" "R-27"
+need Packager.kt "res.zip" "R-28"
+need Packager.kt "--auto-add-overlay" "R-28"
+need Packager.kt "fixAppCompatTheme(" "R-29"
+need Packager.kt "AppCompatActivity" "R-29"
 if [ "$fail" = "0" ]; then echo "== 全部通过 =="; else echo "== 有回归 =="; exit 1; fi

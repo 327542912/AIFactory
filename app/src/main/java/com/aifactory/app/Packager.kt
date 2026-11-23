@@ -218,6 +218,23 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
      * 这里就地补一张 48x48 纯色 PNG（ic_launcher 与 ic_launcher_round 都补），
      * 让构建先能过；用户要真图标再覆盖同名文件即可。
      */
+    /** 手工链没有 AppCompat：values 里 parent="Theme.AppCompat.*" 会 link 失败，这里降级到 framework 主题。 */
+    private fun fixAppCompatTheme(root: File, layout: Layout, onOutput: ((String) -> Unit)?) {
+        val res = layout.res ?: return
+        val values = File(res, "values")
+        if (!values.isDirectory) return
+        values.listFiles()?.filter { it.isFile && it.name.endsWith(".xml") }?.forEach { f ->
+            var t = runCatching { f.readText() }.getOrDefault("")
+            if (!t.contains("Theme.AppCompat")) return@forEach
+            t = t.replace(Regex("parent=\"Theme\\.AppCompat[^\"]*\""), "parent=\"android:style/Theme.Material.Light\"")
+            for (a in listOf("colorPrimary", "colorPrimaryDark", "colorAccent", "colorControlNormal", "colorControlActivated")) {
+                t = t.replace("<item name=\"" + a + "\"", "<item name=\"android:" + a + "\"")
+            }
+            runCatching { f.writeText(t) }
+            onOutput?.invoke("values/" + f.name + " 用了 AppCompat 主题，手工链没有该库 → parent 已降级为 android:style/Theme.Material.Light")
+        }
+    }
+
     private fun ensureIcons(root: File, manifest: File, layout: Layout, onOutput: ((String) -> Unit)?) {
         val res = layout.res ?: return
         val text = runCatching { manifest.readText() }.getOrNull() ?: return
@@ -326,6 +343,22 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         val manifest = lay.manifest
         repairManifest(root, manifest, onOutput, lay)
         ensureIcons(root, manifest, lay, onOutput)
+        fixAppCompatTheme(root, lay, onOutput)
+        // 提前挡：源码/依赖用了 androidx 或 material，手工链根本编不出来，别让用户等两分钟再看到天书报错
+        val bad = lay.javaDirs.asSequence().flatMap { d -> d.walkTopDown().filter { it.isFile && it.name.endsWith(".java") } }
+            .firstOrNull { f ->
+                val t = runCatching { f.readText() }.getOrDefault("")
+                t.contains("androidx.") || t.contains("com.google.android.material") || t.contains("AppCompatActivity")
+            }
+        if (bad != null) {
+            return BuildResult(
+                false, null,
+                "源码用了 androidx / material（" + bad.relativeTo(root).path + "）。零 gradle 手工链不支持 AAR 依赖，" +
+                    "这个项目永远编不过。改法：把 Activity 换成 android.app.Activity、去掉 AppCompatActivity 与 Material 控件，" +
+                    "UI 用原生 View 或自绘 Canvas，然后重新构建。",
+                ""
+            )
+        }
         ensureKeystore()?.let { return BuildResult(false, null, it, "") }
 
         val jar = File(platform, "android.jar").path
@@ -352,12 +385,13 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
                 appendLine("JAR=" + q(jar))
                 appendLine("BT=" + q(bt.path))
                 appendLine("rm -rf \$B")
-                appendLine("mkdir -p \$B/res \$B/gen \$B/classes \$B/dex")
+                appendLine("mkdir -p \$B/gen \$B/classes \$B/dex")
                 val resDir = lay.res
                 val srcList = lay.javaDirs.joinToString(" ") { shQuote(it.path) }
                 if (resDir != null) {
-                    appendLine("\$AAPT2 compile --dir " + q(resDir.path) + " -o \$B/res")
-                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " -R \$B/res --java \$B/gen --min-sdk-version 26 --target-sdk-version 28")
+                    // aapt2 的 -R 只认 .flat / .flat 的 zip；喂目录会报 "Is a directory"（R-28）
+                    appendLine("\$AAPT2 compile --dir " + q(resDir.path) + " -o \$B/res.zip")
+                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " -R \$B/res.zip --auto-add-overlay --java \$B/gen --min-sdk-version 26 --target-sdk-version 28")
                 } else {
                     appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " --java \$B/gen --min-sdk-version 26 --target-sdk-version 28")
                 }

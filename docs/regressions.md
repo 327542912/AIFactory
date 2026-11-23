@@ -34,3 +34,5 @@
 | R-25 | Agent 给手工链项目引入 appcompat，下载 aar 后 `unzip` 再喂 aapt2，反复失败绕圈烧额度 | system prompt 没写「零 gradle 手工链不支持 AAR/依赖解析」，模型按常规 Android 开发习惯行事 | 0.10.4 | `AgentEngine.kt` 含 `不支持 AAR / Gradle 依赖解析` |
 | R-26 | DNS 解析失败（`Unable to resolve host`，HTTP -1）时主通道直接熄火，没有切备用 | 切换条件只写了 429，网络错误与 5xx 不在可重试集合里 | 0.10.5 | `AgentEngine.kt` 含 `retryable` 与 `code == -1` |
 | R-27 | 清单引用 `@mipmap/ic_launcher_round` 但文件不存在，aapt2 报 `not found` + `failed processing manifest` | 手工链没有 AGP 的默认图标；Agent 用 ImageMagick 造图标又没造 round 版本 | 0.10.5 | `Packager.kt` 含 `ensureIcons(` |
+| R-28 | 构建脚本把 `app/build/res`（目录）喂给 `aapt2 link -R`，报 `failed to read magic / Is a directory` | `aapt2 compile --dir res -o $B/res` 产出目录，又被直接当 `-R` 参数；aapt2 只认 .flat 或 zip，且 zip 必须配 `--auto-add-overlay` | 0.10.6 | `Packager.kt` 含 `-o \$B/res.zip` 与 `--auto-add-overlay`；宿主实测：目录→失败，zip+auto-add-overlay→1,351 B apk |
+| R-29 | 项目 themes.xml 用 `Theme.AppCompat`、源码继承 `AppCompatActivity`，手工链必败 | 零 gradle 链没有 AppCompat/Material | 0.10.6 | `Packager.kt` 含 `fixAppCompatTheme(` 与 androidx 预检 |
