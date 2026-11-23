@@ -77,6 +77,11 @@ class AppConfig(context: Context) {
         get() = get("extra_channels", "")
         set(v) = put("extra_channels", v)
 
+    /** 上次校验通过的 GitHub 登录名（只用于显示；Token 失效时会被清空）。 */
+    var ghLogin: String
+        get() = get("gh_login", "")
+        set(v) = put("gh_login", v)
+
     val hasBackup: Boolean
         get() = backupBaseUrl.isNotBlank() && backupModel.isNotBlank()
 

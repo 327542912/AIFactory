@@ -564,6 +564,12 @@ private fun GitHubCard() {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("发布：GitHub", fontWeight = FontWeight.SemiBold)
+            Text(
+                if (cfg.ghLogin.isNotBlank()) "登录状态：@" + cfg.ghLogin + "（Token 已校验通过）"
+                else if (token.isBlank()) "登录状态：未登录（先填 Token）"
+                else "登录状态：未校验（填完点下面的「登录并检查」）",
+                fontSize = 12.sp, color = if (cfg.ghLogin.isNotBlank()) MaterialTheme.colorScheme.primary else Muted
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { open("https://github.com/settings/tokens/new?scopes=repo&description=AIFactory") }) { Text("① 打开 Token 页") }
                 OutlinedButton(onClick = {
@@ -599,7 +605,12 @@ private fun GitHubCard() {
                         val log = StringBuilder()
                         val who = withContext(Dispatchers.IO) { Publisher.whoami(cfg) { log.appendLine(it) } }
                         if (who.first !in 200..299) {
-                            withContext(Dispatchers.Main) { status = "❌ 连接失败（HTTP " + who.first + "）：" + who.second; busy = false }
+                            cfg.ghLogin = ""
+                            withContext(Dispatchers.Main) {
+                                status = "❌ 登录失败（HTTP " + who.first + "）：" + who.second +
+                                    "\n401 = Token 无效/已撤销/过期：去 ① 重新生成一串（只要 repo 权限），再粘回来。"
+                                busy = false
+                            }
                             return@launch
                         }
                         val name = who.second
@@ -615,6 +626,7 @@ private fun GitHubCard() {
                         }
                         withContext(Dispatchers.Main) {
                             login = name
+                            cfg.ghLogin = name
                             repo = cfg.ghRepo
                             if (r.ok) {
                                 link = r.releaseUrl
@@ -625,7 +637,7 @@ private fun GitHubCard() {
                             busy = false
                         }
                     }
-                }) { Text(if (busy) "正在连接…" else "③ 连接并检查") }
+                }) { Text(if (busy) "正在校验…" else "③ 登录并检查") }
                 if (link != null) OutlinedButton(onClick = { open(link!!) }) { Text("打开仓库") }
                 if (link != null) TextButton(onClick = { copy(link!!) }) { Text("复制地址") }
             }
