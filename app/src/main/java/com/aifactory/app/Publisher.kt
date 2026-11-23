@@ -31,21 +31,26 @@ object Publisher {
         if (token.isEmpty()) return Result(false, "先填 Token（需 repo 权限），否则读不到账号也建不了仓库。", null)
         val existing = cfg.ghRepo.trim()
         if (existing.contains("/")) {
-            val r = request("GET", "$API/repos/$existing", token, null, "application/json", onLog)
-            return if (r == null) Result(false, "仓库 $existing 不存在或 Token 无权限。", null)
-            else Result(true, "仓库已存在：" + existing, "https://github.com/" + existing)
+            val v = raw("GET", "$API/repos/$existing", token, onLog = onLog)
+            return if (v.first in 200..299) Result(true, "仓库已存在：" + existing, "https://github.com/" + existing)
+            else when (v.first) {
+                404 -> Result(false, "仓库 $existing 不存在（HTTP 404）：名字拼错了，或它属于别人/私有库而 Token 看不到。", null)
+                401, 403 -> Result(false, "Token 无权访问 $existing（HTTP " + v.first + "）：Personal token 要勾 repo；Fine-grained 要给 Contents 读 + Administration 写。", null)
+                else -> Result(false, "读取仓库失败（HTTP " + v.first + "）：" + tail(v.second, 200), null)
+            }
         }
-        val login = request("GET", "$API/user", token, null, "application/json", onLog)?.optString("login", "")
-        if (login.isNullOrBlank()) return Result(false, "Token 无效或没有 user 权限。", null)
+        val w = raw("GET", "$API/user", token, onLog = onLog)
+        val login = try { org.json.JSONObject(w.second).optString("login", "") } catch (e: Exception) { "" }
+        if (w.first !in 200..299 || login.isBlank()) return Result(false, "Token 无效（HTTP " + w.first + "）：" + tail(w.second, 200), null)
         val name = nameHint.lowercase().replace(Regex("[^a-z0-9._-]"), "-").trim('-').ifBlank { "aifactory-app" }
         val repo = login + "/" + name
         val exists = request("GET", "$API/repos/$repo", token, null, "application/json", { })
         if (exists == null) {
             onLog("新建 public 仓库 $repo …")
-            val made = request("POST", "$API/user/repos", token,
+            val made = raw("POST", "$API/user/repos", token,
                 ("{\"name\":\"" + name + "\",\"private\":false,\"auto_init\":true}").toByteArray(),
                 "application/json", onLog)
-            if (made == null) return Result(false, "建仓失败：$repo（检查 Token 是否有 repo 权限）", null)
+            if (made.first !in 200..299) return Result(false, "建仓失败（HTTP " + made.first + "）：" + tail(made.second, 300) + "\n常见原因：Personal token 没勾 repo；Fine-grained 缺 Administration(写)。", null)
             onLog("已新建：https://github.com/$repo")
         } else {
             onLog("已存在，直接复用：$repo")
@@ -59,7 +64,7 @@ object Publisher {
     fun whoami(cfg: AppConfig, onLog: (String) -> Unit): Pair<Int, String> {
         val token = cfg.ghToken.trim()
         if (token.isEmpty()) return 0 to "Token 为空"
-        val r = raw("GET", "$API/user", token, onLog)
+        val r = raw("GET", "$API/user", token, onLog = onLog)
         if (r.first !in 200..299) return r.first to ("Token 无效或权限不足（HTTP " + r.first + "）：" + tail(r.second, 200))
         val login = try { org.json.JSONObject(r.second).optString("login", "") } catch (e: Exception) { "" }
         return if (login.isBlank()) r.first to "HTTP 200 但读不到 login" else r.first to login
@@ -69,13 +74,13 @@ object Publisher {
     fun checkRepo(cfg: AppConfig, repo: String, onLog: (String) -> Unit): Pair<Int, String> {
         val token = cfg.ghToken.trim()
         if (token.isEmpty()) return 0 to "Token 为空"
-        val r = raw("GET", "$API/repos/" + repo, token, onLog)
+        val r = raw("GET", "$API/repos/" + repo, token, onLog = onLog)
         return r.first to (if (r.first in 200..299) repo else "HTTP " + r.first + "：" + tail(r.second, 200))
     }
 
     private fun tail(s: String, n: Int): String = if (s.length <= n) s else s.substring(0, n) + "…"
 
-    private fun raw(method: String, url: String, token: String, onLog: (String) -> Unit): Pair<Int, String> {
+    private fun raw(method: String, url: String, token: String, body: ByteArray? = null, type: String = "application/json", onLog: (String) -> Unit = {}): Pair<Int, String> {
         var conn: HttpURLConnection? = null
         return try {
             conn = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -84,6 +89,12 @@ object Publisher {
                 setRequestProperty("Authorization", "Bearer " + token)
                 setRequestProperty("Accept", "application/vnd.github+json")
                 setRequestProperty("User-Agent", "AIFactory")
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", type)
+                    setRequestProperty("Content-Length", body.size.toString())
+                    outputStream.use { it.write(body) }
+                }
             }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
