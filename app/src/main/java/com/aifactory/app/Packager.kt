@@ -188,10 +188,49 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
      * - 清单缺 uses-sdk → 补 minSdk 26 / targetSdk 28（targetSdk≤28 是 execve 私有 ELF 的前提）
      * 每处修复都写进日志，用户和 Agent 都能看到改了什么。
      */
+    /** 用系统 XML 解析器验一遍；aapt2 报的 not well-formed 在这里就能提前抓到。 */
+    private fun xmlOk(text: String): String? = try {
+        val f = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        f.isNamespaceAware = true
+        // 不是所有实现都支持这个 feature，别让它把“校验器不支持”误报成“XML 不合法”
+        runCatching { f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+        val b = f.newDocumentBuilder()
+        b.parse(java.io.ByteArrayInputStream(text.toByteArray()))
+        null
+    } catch (e: Exception) {
+        e.message ?: e.javaClass.simpleName
+    }
+
+    /**
+     * 构建前把工程侧的硬性缺陷修掉，而不是让构建失败：
+     * - 清单缺 package 属性（AGP 用 namespace，aapt2 只认 package）→ 从 java 源码的 package 语句补
+     * - uses-sdk 缺 minSdkVersion / targetSdkVersion>28 → **整段重建成规范元素**，不做属性级字符串插入
+     * - 每次改写前后都用 XML 解析器校验；一旦不合法就回滚，绝不让坏清单进入 aapt2
+     * 每处修复都写进日志，用户和 Agent 都能看到改了什么。
+     *
+     * 为什么整段重建：aapt2 在清单自带 <uses-sdk> 时会忽略命令行 --min-sdk-version，
+     * 缺 min 就直接不写进 APK，自检必挂；而按属性位置做字符串插入，遇到跨行/异常写法
+     * 会切坏 XML（0.9.4 的 line 10 invalid token 就是这么来的）。
+     */
     private fun repairManifest(root: File, manifest: File, onOutput: ((String) -> Unit)?, layout: Layout? = null) {
         runCatching {
+            val bak = File(manifest.parentFile, manifest.name + ".aifactory-bak")
             var text = manifest.readText()
             val log = java.util.ArrayList<String>()
+
+            // 上一次改写把文件弄坏时，先从备份恢复（只在备份本身合法时）
+            val bad = xmlOk(text)
+            if (bad != null) {
+                val bakText = if (bak.exists()) runCatching { bak.readText() }.getOrNull() else null
+                if (bakText != null && xmlOk(bakText) == null) {
+                    text = bakText
+                    log += "原清单不是合法 XML（" + bad + "），已从 " + bak.name + " 恢复"
+                } else {
+                    onOutput?.invoke("[自愈] 清单 XML 不合法且无可用的合法备份，放弃改写：" + bad)
+                    return@runCatching
+                }
+            }
+
             if (!Regex("package\\s*=").containsMatchIn(text)) {
                 val java = (layout?.javaDirs ?: listOf(File(root, "app/src/main/java")))
                     .asSequence().filter { it.isDirectory }
@@ -203,46 +242,39 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
                     log += "补 package=\"" + pkg + "\""
                 }
             }
-            if (!text.contains("uses-sdk")) {
-                val inject = "<uses-sdk android:minSdkVersion=\"26\" android:targetSdkVersion=\"28\" />"
-                text = if (text.contains("</manifest>")) text.replace("</manifest>", "    " + inject + "\n</manifest>")
-                else text.replace("</application>", "</application>\n" + inject)
+
+            // 找到 <uses-sdk ...> 的整段（含跨行写法）
+            val tag = Regex("<uses-sdk\\b[^>]*>").find(text)
+            val canon = "<uses-sdk android:minSdkVersion=\"26\" android:targetSdkVersion=\"28\" />"
+            if (tag == null) {
+                text = if (text.contains("</manifest>")) text.replace("</manifest>", "    " + canon + "\n</manifest>")
+                else text.replace("</application>", "</application>\n" + canon)
                 log += "补 uses-sdk(min26/target28)"
             } else {
-                // 有 <uses-sdk> 但缺 minSdkVersion / 只写了 targetSdk：aapt2 link 会忽略命令行
-                // --min-sdk-version，直接用清单里的值，于是 APK badging 里 min 是空的，自检必挂。
-                val tag = Regex("<uses-sdk\\b[^>]*>").find(text)
-                if (tag != null) {
-                    var t = tag.value
-                    var changed = false
-                    val min = Regex("android:minSdkVersion=\"([^\"]*)\"").find(t)
-                    val minVal = min?.groupValues?.get(1) ?: ""
-                    if (min == null || minVal.toIntOrNull() == null || (minVal.toIntOrNull() ?: 0) < 21) {
-                        t = if (t.trimEnd().endsWith("/>"))
-                            t.replace(Regex("/>"), " android:minSdkVersion=\"26\" />")
-                        else
-                            t.replaceFirst(">", " android:minSdkVersion=\"26\">")
-                        log += "minSdkVersion 原为\"" + minVal + "\"，补/改为 26（aapt2 以清单为准，缺就不写进 APK）"
-                        changed = true
-                    }
-                    val tg = Regex("android:targetSdkVersion=\"([^\"]*)\"").find(t)
-                    val tgVal = tg?.groupValues?.get(1) ?: ""
-                    val tgNum = tgVal.toIntOrNull()
-                    if (tgNum == null || tgNum > 28) {
-                        t = if (tg == null) t.replaceFirst(">", " android:targetSdkVersion=\"28\">")
-                        else t.replace("android:targetSdkVersion=\"" + tgVal + "\"", "android:targetSdkVersion=\"28\"")
-                        log += "targetSdkVersion 原为\"" + tgVal + "\"，改为 28（>28 时 SELinux 拒绝 exec 私有目录 ELF）"
-                        changed = true
-                    }
-                    if (changed) text = text.substring(0, tag.range.first) + t + text.substring(tag.range.last + 1)
+                val old = tag.value
+                val min = Regex("android:minSdkVersion=\"([^\"]*)\"").find(old)?.groupValues?.get(1) ?: ""
+                val tg = Regex("android:targetSdkVersion=\"([^\"]*)\"").find(old)?.groupValues?.get(1) ?: ""
+                val minNum = min.toIntOrNull()
+                val tgNum = tg.toIntOrNull()
+                if (minNum == null || minNum < 21 || tgNum == null || tgNum > 28) {
+                    text = text.substring(0, tag.range.first) + canon + text.substring(tag.range.last + 1)
+                    log += "uses-sdk 原为 min=\"" + min + "\" target=\"" + tg + "\" → 重建为 min26/target28" +
+                        "（aapt2 以清单为准；target>28 会因 SELinux 拒绝 exec 私有目录 ELF）"
                 }
             }
-            if (log.isNotEmpty()) {
-                val bak = File(manifest.parentFile, manifest.name + ".aifactory-bak")
-                if (!bak.exists()) runCatching { bak.writeText(manifest.readText()) }
-                manifest.writeText(text)
-                log.forEach { onOutput?.invoke("[自愈] 清单" + it) }
+
+            if (log.isEmpty()) return@runCatching
+            val verifyErr = xmlOk(text)
+            if (verifyErr != null) {
+                onOutput?.invoke("[自愈] 改写后 XML 不合法（" + verifyErr + "），已放弃本次改写，保留原文件")
+                return@runCatching
             }
+            if (!bak.exists()) {
+                val original = runCatching { bak.writeText(manifest.readText()) }
+                original.onFailure { onOutput?.invoke("[自愈] 备份失败：" + it.message + "（继续，但无法回滚）") }
+            }
+            manifest.writeText(text)
+            log.forEach { onOutput?.invoke("[自愈] 清单" + it) }
         }.onFailure { onOutput?.invoke("[自愈] 清单修复失败：" + it.message) }
     }
 
