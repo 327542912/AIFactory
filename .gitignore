@@ -3,3 +3,6 @@
 local.properties
 build/
 app/build/
+# apk/ 是 CI 产物目录，要允许提交（上面 *.apk 只用于挡本地 build 输出）
+!apk/*.apk
+!apk/*.sha256
