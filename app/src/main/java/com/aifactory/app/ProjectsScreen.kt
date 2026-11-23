@@ -241,6 +241,20 @@ fun ProjectsScreen() {
                 }
             }
         }
+        val sel = selected
+        val verdict = if (sel != null) VerifyRunner.readVerdict(File(rt.workspace, sel)) else null
+        if (sel != null) {
+            val color = when (verdict) {
+                "PASS" -> Color(0xFF2E7D32)
+                "CRASH", "BLANK", "NOT_INSTALLED", "NO_LAUNCHER" -> Color(0xFFB4553C)
+                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
+            }
+            Text(
+                "验证状态：" + (verdict ?: "未验证") +
+                    if (verdict == null) "（点「验证运行」：装→启动→取证）" else "",
+                fontSize = 11.sp, color = color
+            )
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(enabled = selected != null && !busy, onClick = { runBuild(false) }) { Text("构建 Debug") }
             Button(enabled = selected != null && !busy, onClick = {
@@ -266,6 +280,10 @@ fun ProjectsScreen() {
                 val name = selected ?: return@OutlinedButton
                 Pipeline.buildAab(ctx, rt, File(rt.workspace, name))
             }) { Text("构建 AAB（上架）") }
+            OutlinedButton(enabled = selected != null && !busy, onClick = {
+                val name = selected ?: return@OutlinedButton
+                Pipeline.verifyProject(ctx, rt, File(rt.workspace, name))
+            }) { Text("验证运行") }
             OutlinedButton(enabled = selected != null && !busy, onClick = { confirmDelete = selected }) { Text("删除项目") }
             if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
             TextButton(onClick = {

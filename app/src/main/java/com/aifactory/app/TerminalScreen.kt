@@ -201,6 +201,8 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
         )
         val s = TerminalSession(bash.path, ws.path, arrayOf("-l"), env, 3000, this)
         session = s
+        // 注册给 Agent：run_shell 会写进这一条会话，用户在屏幕上能看见它执行的每条命令
+        SessionHub.register(s)
         finished = false
         currentTitle = "bash"
         return s
@@ -249,6 +251,7 @@ class AiTerminalBridge(private val ctx: Context) : TerminalSessionClient, Termin
     }
 
     fun close() {
+        SessionHub.register(null)
         try { session?.finishIfRunning() } catch (_: Exception) {}
         session = null
         finished = true

@@ -45,7 +45,11 @@ class AgentEngine(private val ctx: Context) {
     var lastStats: String = ""; private set
 
     private val tools = listOf(
-        ToolDef("run_shell", "在 Runtime 中执行 shell 命令（bash）。默认工作目录为工作区。",
+        ToolDef("verify_app", "真机验证：装 → 启动 →（有 adb 时）抓崩溃栈与截图 → 写 verify.json。构建成功不等于能跑，汇报完成前必须跑它。",
+            mapOf("project" to "项目名（相对工作区），留空=当前项目"), emptyList()),
+        ToolDef("adb", "直接在手机上跑 adb 命令（需先在设置页做无线调试配对）。拿 logcat、screencap、am start、pm list 都靠它。",
+            mapOf("command" to "adb 后面的参数，例如 \"shell logcat -d -b crash | tail -40\""), listOf("command")),
+        ToolDef("run_shell", "在终端页那条 bash 里执行命令（用户能看见）；终端页没开时退化成私有 bash。默认工作目录为工作区。",
             mapOf("command" to "要执行的命令", "cwd" to "相对工作区的目录，可选", "timeout_sec" to "超时秒数，默认 120，最大 3600"),
             listOf("command")),
         ToolDef("read_file", "读取工作区内的文本文件。", mapOf("path" to "相对工作区的路径"), listOf("path")),
@@ -463,6 +467,14 @@ class AgentEngine(private val ctx: Context) {
                 else {
                     val cwd = a.optString("cwd").takeIf { it.isNotBlank() }?.let { resolve(it) } ?: workspace
                     val t = (a.optString("timeout_sec").toIntOrNull() ?: 120).coerceIn(1, 3600)
+                    // 优先写进用户眼前那条终端会话；它能看见、输出也被 tee 落盘
+                    val shared = SessionHub.run(ctx, cmd, cwd, t)
+                    if (shared != null) {
+                        val status = if (shared.timedOut) "超时（" + t + "s，已发 Ctrl-C）" else "退出码 " + shared.code
+                        (if (rewritten) "【已清理命令】原文有 \"\\ \" 转义，已还原为：" + cmd + "\n" else "") +
+                            "【执行环境】终端页同一条 bash（用户在屏幕上能看到这条命令）\n" + status + "\n" +
+                            tailText(shared.text.ifBlank { "(没有输出)" }, 10000)
+                    } else {
                     val r = rt.run(cmd, cwd, t)
                     val status = when {
                         r.timedOut -> "超时（${t}s）已终止"
@@ -477,6 +489,7 @@ class AgentEngine(private val ctx: Context) {
                         "【执行环境】系统 sh（Runtime 未安装：命令跑在 /system/bin/sh，没有 bash/coreutils/java；本次结果不代表完整 Runtime）"
                     (if (rewritten) "【已清理命令】原文有 \"\\ \" 转义，已还原为：" + cmd + "\n" else "") +
                         head + "\n$status\n" + tailText(r.output.ifBlank { "(没有输出)" }, 10000)
+                    }
                 }
             }
             "read_file" -> {
@@ -576,6 +589,26 @@ class AgentEngine(private val ctx: Context) {
                             }
                         }
                     }
+                }
+            }
+            "verify_app" -> {
+                val projArg = a.optString("project").ifBlank { WorkState.currentProject ?: "" }
+                if (projArg.isBlank()) "没有指定项目也没有当前项目，无法验证。" else {
+                    val dir = resolve(projArg)
+                    if (!dir.isDirectory) "项目不存在：" + dir.path
+                    else {
+                        val v = VerifyRunner.verify(ctx, rt, dir) { line -> SessionHub.notify(line) }
+                        "【验证结论】" + v.verdict + "\n" + v.detail +
+                            (if (v.json != null) "\n证据文件：" + v.json.path else "")
+                    }
+                }
+            }
+            "adb" -> {
+                val bridge = AdbBridge(ctx, rt)
+                if (!bridge.available()) "adb 未安装：Runtime 里没有 adb。设置页有「安装 adb」入口（走本地 apt 源，需要先在 CI 里把 android-tools 打进源）。" else {
+                    val sub = a.optString("command").ifBlank { "devices" }
+                    val r = rt.run(shQuote(bridge.bin()!!.path) + " " + sub, RuntimePaths.home(ctx), 120)
+                    "【adb " + sub.split(" ").first() + "】退出码 " + r.exitCode + "\n" + tailText(r.output.ifBlank { "(没有输出)" }, 6000)
                 }
             }
             "install_apk" -> {

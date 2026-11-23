@@ -59,6 +59,8 @@ internal object Pipeline {
     /** 上架模式产物（AAB）。与 APK 分开存，避免「最近产物」卡把 aab 当 apk 装。 */
     var lastAab by mutableStateOf<File?>(null); private set
     var lastAabNote by mutableStateOf(""); private set
+    /** 最近一次真机验证结论：PASS / CRASH / BLANK / NOT_INSTALLED / NO_LAUNCHER / NO_APK / LAUNCHED_UNVERIFIED */
+    var lastVerdict by mutableStateOf<String?>(null); private set
 
     /** 最近一次任务的完整日志文件（已落盘，可直接复制/导出）。 */
     var lastLog by mutableStateOf<File?>(null); private set
@@ -100,6 +102,14 @@ internal object Pipeline {
     }
 
     /** 项目构建的标准流水线：工具链 → gradle → 产物落 outputs。 */
+    fun verifyProject(ctx: Context, rt: RuntimeEngine, dir: File) {
+        submit(ctx, "验证运行 " + dir.name, listOf("安装", "启动", "取证(logcat/截图)", "写 verify.json")) { report ->
+            val v = VerifyRunner.verify(ctx, rt, dir) { line -> report(line) }
+            main.post { lastVerdict = v.verdict }
+            "【" + v.verdict + "】" + v.detail + (if (v.json != null) "\n证据：" + v.json.path else "")
+        }
+    }
+
     fun buildAab(ctx: Context, rt: RuntimeEngine, dir: File) {
         submit(
             ctx,

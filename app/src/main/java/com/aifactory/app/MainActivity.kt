@@ -30,6 +30,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -412,6 +413,67 @@ private fun GitHubCard() {
     }
 }
 
+
+@Composable
+private fun AdbCard() {
+    val ctx = LocalContext.current
+    val rt = remember { RuntimeEngine(ctx.applicationContext) }
+    val adb = remember { AdbBridge(ctx.applicationContext, rt) }
+    val scope = rememberCoroutineScope()
+    var pairPort by remember { mutableStateOf("") }
+    var pairCode by remember { mutableStateOf("") }
+    var connPort by remember { mutableStateOf("5555") }
+    var out by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("真机取证：无线调试 adb", fontWeight = FontWeight.SemiBold)
+            Text(
+                if (adb.available()) "adb 已就绪：" + (adb.bin()?.path ?: "")
+                else "adb 未安装。Android 不允许普通 App 读别的进程 logcat，所以「看到真实崩溃栈」只有 adb 这一条路。",
+                fontSize = 11.sp, color = Muted
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(pairPort, { pairPort = it }, label = { Text("配对端口") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(pairCode, { pairCode = it }, label = { Text("配对码") }, singleLine = true, modifier = Modifier.weight(1f))
+            }
+            Text("开发者选项 → 无线调试 → 使用配对码配对设备，界面上会给「IP:端口」和 6 位码。", fontSize = 11.sp, color = Muted)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(connPort, { connPort = it }, label = { Text("连接端口") }, singleLine = true, modifier = Modifier.width(120.dp))
+                Button(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        val msg = adb.pair(pairPort, pairCode)
+                        withContext(Dispatchers.Main) { out = msg; busy = false }
+                    }
+                }) { Text("配对") }
+                Button(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        val msg = adb.connect(connPort.ifBlank { "5555" })
+                        withContext(Dispatchers.Main) { out = msg; busy = false }
+                    }
+                }) { Text("连接") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        val msg = if (adb.available()) adb.devices()
+                        else rt.run("apt-get install -y android-tools", RuntimePaths.home(ctx), 300).let {
+                            if (it.exitCode == 0 && AdbBridge(ctx, rt).available()) "adb 已安装：" + (AdbBridge(ctx, rt).bin()?.path ?: "")
+                            else "安装失败（退出码 " + it.exitCode + "）：\n" + tailText(it.output, 800) +
+                                "\n本地 apt 源里没有 android-tools（它必须在 CI 里用本前缀编译，官方 Termux 包直接搬会因 rpath 指向 com.termux 起不来）。"
+                        }
+                        withContext(Dispatchers.Main) { out = msg; busy = false }
+                    }
+                }) { Text(if (adb.available()) "检查连接" else "安装 adb") }
+            }
+            out?.let { Text(it, fontSize = 11.sp, fontFamily = FontFamily.Monospace, lineHeight = 16.sp) }
+        }
+    }
+}
+
 @Composable
 private fun SettingsPage() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -419,6 +481,7 @@ private fun SettingsPage() {
         Text("AIFactory ${BuildConfig.VERSION_NAME} · 独立 Runtime · Android AI Development Workspace", color = Muted)
         GuideCard()
         GitHubCard()
+        AdbCard()
         RuntimeSetupCard()
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(16.dp)) {
