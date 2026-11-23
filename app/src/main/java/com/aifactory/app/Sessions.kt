@@ -39,6 +39,9 @@ internal object ChatRunner {
     var busy by mutableStateOf(false)
         private set
 
+    /** 对话列表当前滚动位置。跨 tab 切换保留，避免回对话页时从第 1 条重新扫到底。 */
+    var scrollIndex by mutableStateOf(0)
+
     private var job: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val main = Handler(Looper.getMainLooper())
@@ -71,6 +74,7 @@ internal object ChatRunner {
         if (sessions.isEmpty()) {
             val id = System.currentTimeMillis().toString()
             currentId = id
+        scrollIndex = 0
             messages.clear()
             messages.add(ChatMessage("assistant", HELLO))
             runCatching {
@@ -93,6 +97,7 @@ internal object ChatRunner {
         if (busy) return
         if (currentId.isNotBlank() && currentId != id) persist(ctx)
         currentId = id
+        scrollIndex = 0
         messages.clear()
         val f = fileOf(ctx, id)
         runCatching {

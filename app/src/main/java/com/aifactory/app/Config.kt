@@ -54,6 +54,22 @@ class AppConfig(context: Context) {
         get() = get("api_key", "")
         set(v) = put("api_key", v)
 
+    /** 备用通道：主通道连续 429 时自动切换，避免长任务半路掉线（可为本地 llama.cpp server）。 */
+    var backupBaseUrl: String
+        get() = get("backup_base_url", "")
+        set(v) = put("backup_base_url", v)
+
+    var backupModel: String
+        get() = get("backup_model", "")
+        set(v) = put("backup_model", v)
+
+    var backupApiKey: String
+        get() = get("backup_api_key", "")
+        set(v) = put("backup_api_key", v)
+
+    val hasBackup: Boolean
+        get() = backupBaseUrl.isNotBlank() && backupModel.isNotBlank()
+
     var bootstrapUrl: String
         get() = get("bootstrap_url", "https://github.com/327542912/AIFactory/releases/download/runtime-latest/bootstrap-aarch64.zip")
         set(v) = put("bootstrap_url", v)

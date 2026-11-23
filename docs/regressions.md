@@ -20,4 +20,7 @@
 | R-12 | “构建成功”就宣称测试通过，实际没启动 | 没有启动闸门 | 0.8.3 | `AgentEngine.kt` 含 `launch_app`；`VerifyRunner.kt` 含 `verify.json` |
 | R-13 | `apt install android-tools` 报 `Unable to locate package` | 本地 apt 源只有 261 包，不含 android-tools（需 CI 用本前缀编译） | 未修（待 runtime workflow） | `AdbBridge.kt` 存在；设置页 AdbCard 给出“必须在 CI 编”的说明 |
 | R-14 | 长按项目名没有删除入口（只能先选中再点底部按钮，小屏会被挤） | 项目 chip 用 `FilterChip`，不支持长按 | 0.9.7 | `ProjectsScreen.kt` 含 `combinedClickable` 与 `长按项目名` |
-| R-15 | 真机截图上「构建 Debug / 构建并安装 / Release」按钮被裁成半截字，点不到 | 7 个按钮塞进一个 `Row`，窄屏被压缩换行、被容器高度裁切 | 0.9.8 | `ProjectsScreen.kt` 含 `horizontalScroll(rememberScrollState())` 与 `softWrap = false` |
+| R-15 | 项目页按钮「构建 Release（签名）」被挤成三行，第三个按钮被右边缘切掉、后两个在屏外 | 7 个按钮塞进一个不可滚动的 `Row`，窄屏下换行并横向溢出（真机上滑一下能看到上半截，是滚动位置，不是纵向裁切——这点我一度误判，已更正） | 0.9.8 | `ProjectsScreen.kt` 含 `horizontalScroll(rememberScrollState())` 与 `softWrap = false` |
+| R-16 | 长任务跑到一半模型 429 掉线，任务中断（`模型 API 错误(HTTP 429)`，10 次请求 9 次工具） | 只做主通道短退避，没有备用通道，也没有断点提示 | 0.9.8 | `AgentEngine.kt` 含 `hasBackup` 与 `已切到备用通道`；`MainActivity.kt` 含 `备用模型通道` |
+| R-16 | 长任务跑到一半模型 429 掉线，整轮中断（`模型 API 错误(HTTP 429)`，10 次请求 9 次工具） | 只有主通道短退避（2s/4s/6s），无备用通道、无断点提示 | 0.9.8 | `AgentEngine.kt` 含 `已切到备用通道`、`hasBackup`；`MainActivity.kt` 含 `备用模型通道` |
+| R-17 | 每次切回对话页，列表从第 1 条一路滑到底，观感像在“重放” | 进入页面就用 `animateScrollToItem(最后一条)`，且滚动位置不跨 tab 保存，回页面时 listState 从 0 开始 | 0.9.8 | `MainActivity.kt` 含 `initialFirstVisibleItemIndex = ChatRunner.scrollIndex`；`Sessions.kt` 含 `var scrollIndex` |

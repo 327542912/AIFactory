@@ -185,20 +185,49 @@ class AgentEngine(private val ctx: Context) {
                 compactHistory()
                 requests++; steps = step
                 var resp = withContext(Dispatchers.IO) { callModel(cfg) }
-                // 免费模型常被限流（GLM 的 1305 / 429）。退避重试 3 次，别把用户扔在错误页
+                // 免费模型常被限流（GLM 的 1305 / 429）：先主通道退避 3 次，仍不行且配了备用通道就切换。
+                // 关键：history 一直在，切通道只是换“谁来回话”，工具链条和已做步骤都不丢。
+                var onBackup = false
                 var throttle = 0
-                while (resp.first == 429 && throttle < 3) {
-                    throttle++
-                    emit("模型限流（HTTP 429），" + (2 * throttle) + "s 后自动重试（" + throttle + "/3）")
-                    delay(2000L * throttle)
-                    resp = withContext(Dispatchers.IO) { callModel(cfg) }
+                fun backoff(n: Int, hint: Int): Int =
+                    if (hint > 0) hint.coerceAtMost(30) else (2000L * n).coerceAtMost(20000L).toInt()
+                while (resp.first == 429) {
+                    if (!onBackup) {
+                        if (throttle < 3) {
+                            throttle++
+                            val wait = backoff(throttle, lastRetryAfter)
+                            emit("模型限流（HTTP 429），" + wait + "s 后自动重试（" + throttle + "/3，主通道）")
+                            delay(wait * 1000L)
+                            resp = withContext(Dispatchers.IO) { callModel(cfg) }
+                        } else if (cfg.hasBackup) {
+                            onBackup = true; throttle = 0
+                            emit("主通道连续限流，已切到备用通道：" + cfg.backupModel + "（步骤与上下文不丢）")
+                            resp = withContext(Dispatchers.IO) {
+                                callModel(cfg, cfg.backupBaseUrl, cfg.backupModel, cfg.backupApiKey)
+                            }
+                        } else break
+                    } else {
+                        if (throttle < 3) {
+                            throttle++
+                            val wait = backoff(throttle, lastRetryAfter)
+                            emit("备用通道也限流（HTTP 429），" + wait + "s 后重试（" + throttle + "/3）")
+                            delay(wait * 1000L)
+                            resp = withContext(Dispatchers.IO) {
+                                callModel(cfg, cfg.backupBaseUrl, cfg.backupModel, cfg.backupApiKey)
+                            }
+                        } else break
+                    }
                 }
+                if (onBackup && resp.first in 200..299) emit("（本轮后续请求使用备用通道 " + cfg.backupModel + "）")
                 if (resp.first == 400 && nativeTools && resp.second.contains("tool", ignoreCase = true)) {
                     nativeTools = false
                     emit("服务端不支持原生工具调用，已切换到文本协议。")
                     resp = withContext(Dispatchers.IO) { callModel(cfg) }
                 }
-                if (resp.first !in 200..299) return "模型 API 错误（HTTP ${resp.first}）：${tailText(resp.second, 800)}"
+                if (resp.first !in 200..299) return "模型 API 错误（HTTP " + resp.first + "）：" + tailText(resp.second, 800) +
+                    "\n已做了 " + (steps - 1) + " 步、工具调用 " + toolCalls + " 次；上下文没丢——" +
+                    "回复「继续」我会从断点接着跑（不会重头再来）。" +
+                    (if (cfg.hasBackup) "" else "\n建议在设置页配一个「备用模型通道」：主通道限流时自动切换，长任务就不会半路掉线。")
 
                 val msg = try {
                     JSONObject(resp.second).getJSONArray("choices").getJSONObject(0).getJSONObject("message")
@@ -331,6 +360,7 @@ class AgentEngine(private val ctx: Context) {
                 setRequestProperty("User-Agent", "AIFactory/1.0")
             }
             val code = conn.responseCode
+            lastRetryAfter = (conn.getHeaderField("Retry-After") ?: "").trim().toIntOrNull() ?: 0
             if (code !in 200..299) return "HTTP " + code + "，下载失败"
             val cap = maxMb.toLong() * 1024 * 1024
             var total = 0L
@@ -449,17 +479,25 @@ class AgentEngine(private val ctx: Context) {
         }
     }
 
-    private fun callModel(cfg: AppConfig): Pair<Int, String> {
+    /** 服务端在 429 里给的 Retry-After（秒）；没有就是 0。 */
+    private var lastRetryAfter = 0
+
+    private fun callModel(
+        cfg: AppConfig,
+        baseUrl: String = cfg.baseUrl,
+        model: String = cfg.model,
+        key: String = cfg.apiKey
+    ): Pair<Int, String> {
         var conn: HttpURLConnection? = null
         return try {
-            conn = (URL(cfg.baseUrl.trimEnd('/') + "/chat/completions").openConnection() as HttpURLConnection).apply {
+            conn = (URL(baseUrl.trimEnd('/') + "/chat/completions").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"; connectTimeout = 20000; readTimeout = 300000; doOutput = true
                 setRequestProperty("Content-Type", "application/json")
-                if (cfg.apiKey.isNotBlank()) setRequestProperty("Authorization", "Bearer ${cfg.apiKey}")
+                if (key.isNotBlank()) setRequestProperty("Authorization", "Bearer " + key)
             }
             val messages = JSONArray().put(JSONObject().put("role", "system").put("content", systemPrompt()))
             for (i in 0 until history.length()) messages.put(history.getJSONObject(i))
-            val body = JSONObject().put("model", cfg.model).put("messages", messages).put("temperature", 0.2)
+            val body = JSONObject().put("model", model).put("messages", messages).put("temperature", 0.2)
             if (nativeTools) body.put("tools", toolSpecs()).put("tool_choice", "auto")
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode

@@ -199,10 +199,24 @@ private fun ChatPage(
     val busy = ChatRunner.busy
     val sessionList = ChatRunner.sessions
     val rtInfo = remember { RuntimeEngine(ctx.applicationContext) }
-    val listState = rememberLazyListState()
-    // 进页面、来新消息、Agent 工作状态变化都滚到底：否则切回来停在旧位置，要手动往下翻
+    // 从上次位置开始渲染：切 tab 回来不再从第 1 条慢慢扫到底
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = ChatRunner.scrollIndex)
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { ChatRunner.scrollIndex = it }
+    }
+    // 只有“你本来就在底部”或 Agent 正在输出时才播放滚动动画；刚进页面直接定位，不播长距离动画
+    var landed by remember(ChatRunner.currentId) { mutableStateOf(false) }
     LaunchedEffect(messages.size, busy, ChatRunner.currentId) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+        if (messages.isEmpty()) return@LaunchedEffect
+        val last = messages.size - 1
+        if (!landed) {
+            val keep = ChatRunner.scrollIndex.coerceIn(0, last)
+            listState.scrollToItem(if (keep > 0) keep else last)
+            landed = true
+            return@LaunchedEffect
+        }
+        val visibleLast = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (busy || visibleLast >= last - 2) listState.animateScrollToItem(last)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -542,6 +556,40 @@ private fun AdbCard() {
     }
 }
 
+
+@Composable
+private fun BackupCard() {
+    val ctx = LocalContext.current
+    val cfg = remember { AppConfig(ctx.applicationContext) }
+    var base by remember { mutableStateOf(cfg.backupBaseUrl) }
+    var model by remember { mutableStateOf(cfg.backupModel) }
+    var key by remember { mutableStateOf(cfg.backupApiKey) }
+    var showKey by remember { mutableStateOf(false) }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("备用模型通道（主通道 429 自动切换）", fontWeight = FontWeight.SemiBold)
+            Text(
+                if (cfg.hasBackup) "已配置：" + cfg.backupModel + " @ " + cfg.backupBaseUrl
+                else "未配置。不配也能用，只是长任务撞上主模型限流时会中断；配了就会自动换人接着跑，步骤不丢。",
+                fontSize = 11.sp, color = Muted
+            )
+            OutlinedTextField(base, { base = it; cfg.backupBaseUrl = it }, label = { Text("备用 API 地址（例 https://api.siliconflow.cn/v1）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(model, { model = it; cfg.backupModel = it }, label = { Text("备用模型名（例 zhipuai/GLM-Z1-9B）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(
+                key, { key = it; cfg.backupApiKey = it },
+                label = { Text("备用 API Key") },
+                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示") } },
+                singleLine = true, modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "也可以填本地 llama.cpp：地址 http://127.0.0.1:8080/v1，模型名随便填（如 local），Key 留空。断网时它照样能接活。",
+                fontSize = 11.sp, color = Muted
+            )
+        }
+    }
+}
+
 @Composable
 private fun SettingsPage() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -549,6 +597,7 @@ private fun SettingsPage() {
         Text("AIFactory ${BuildConfig.VERSION_NAME} · 独立 Runtime · Android AI Development Workspace", color = Muted)
         GuideCard()
         GitHubCard()
+        BackupCard()
         AdbCard()
         RuntimeSetupCard()
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
