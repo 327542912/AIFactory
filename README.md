@@ -103,6 +103,18 @@ scripts/regression-guard.sh  源码断言闸门
 | 日志 | `files/home/.aifactory/logs/` |
 | 崩溃 | `files/home/.aifactory/logs/crash-*.txt` |
 
+## 发布流水线（GitHub Actions）
+
+推送到分支 `app-0.2.2` 即触发 `.github/workflows/android-build.yml`：
+
+1. `gradle assembleDebug` 构建（JDK 21 + platform android-34 + Gradle 8.7）
+2. 校验产物非空、打印体积与 sha256
+3. 上传 artifact `aifactory-debug-apk`
+4. **把 APK 同步进 `main:apk/`**：`AIFactory-<版本>-debug.apk`、`AIFactory-latest.apk` 与对应 `.sha256`
+5. **更新 release `apk-latest`**（滚动替换，旧资产删除，避免下错版本）
+
+签名用的是仓库内 `keystore/aifactory-debug.jks`（密码 `aifactory`，别名 `aifactory`），所以 CI 出的包和本机出的包签名一致，可直接覆盖安装，不需要卸载。
+
 ## 自己编译（宿主机）
 
 ```bash
