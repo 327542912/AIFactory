@@ -24,3 +24,4 @@
 | R-16 | 长任务跑到一半模型 429 掉线，任务中断（`模型 API 错误(HTTP 429)`，10 次请求 9 次工具） | 只做主通道短退避，没有备用通道，也没有断点提示 | 0.9.8 | `AgentEngine.kt` 含 `hasBackup` 与 `已切到备用通道`；`MainActivity.kt` 含 `备用模型通道` |
 | R-16 | 长任务跑到一半模型 429 掉线，整轮中断（`模型 API 错误(HTTP 429)`，10 次请求 9 次工具） | 只有主通道短退避（2s/4s/6s），无备用通道、无断点提示 | 0.9.8 | `AgentEngine.kt` 含 `已切到备用通道`、`hasBackup`；`MainActivity.kt` 含 `备用模型通道` |
 | R-17 | 每次切回对话页，列表从第 1 条一路滑到底，观感像在“重放” | 进入页面就用 `animateScrollToItem(最后一条)`，且滚动位置不跨 tab 保存，回页面时 listState 从 0 开始 | 0.9.8 | `MainActivity.kt` 含 `initialFirstVisibleItemIndex = ChatRunner.scrollIndex`；`Sessions.kt` 含 `var scrollIndex` |
+| R-18 | 一键发布到 GitHub 只传了 APK，AAB（上架包）留在设备里要手工搬 | `Publisher.publish` 无 AAB 分支 | 0.9.9 | `Publisher.kt` 含 `app/build/outputs/bundle/app-release.aab` |

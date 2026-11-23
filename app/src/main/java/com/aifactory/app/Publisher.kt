@@ -164,8 +164,11 @@ object Publisher {
         if (apk != null && apk.exists()) {
             uploadAsset(repo, releaseId, token, apk, apk.name, onLog)
         } else {
-            onLog("没有构建产物，只发布了源码。")
+            onLog("没有 APK 产物，跳过 APK。")
         }
+        // 5) 上传 AAB（有就传）：Windows 上架的包，也放进同一个 Release，免得再手工搬
+        val aab = File(projectDir, "app/build/outputs/bundle/app-release.aab")
+        if (aab.exists()) uploadAsset(repo, releaseId, token, aab, aab.name, onLog) else onLog("没有 AAB 产物（先点「构建 AAB」）。")
         zip.delete()
         return Result(true, "已发布到 $repo · tag $tag", htmlUrl)
     }

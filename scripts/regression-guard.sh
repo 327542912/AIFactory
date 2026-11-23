@@ -34,4 +34,5 @@ need AgentEngine.kt "已切到备用通道" "R-16"
 need MainActivity.kt "备用模型通道" "R-16"
 need MainActivity.kt "initialFirstVisibleItemIndex = ChatRunner.scrollIndex" "R-17"
 need Sessions.kt "var scrollIndex" "R-17"
+need Publisher.kt "app/build/outputs/bundle/app-release.aab" "R-18"
 if [ "$fail" = "0" ]; then echo "== 全部通过 =="; else echo "== 有回归 =="; exit 1; fi
