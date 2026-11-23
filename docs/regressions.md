@@ -31,3 +31,6 @@
 | R-22 | 长任务越跑越慢、48 次请求 447s，上下文只涨不降 | `compactHistory` 只在总量>60000 字时截断工具输出，从不丢弃旧轮次，也从不给模型留下摘要 | 0.10.2 | `AgentEngine.kt` 含 `historyBudget`、`早前对话摘要` |
 | R-23 | 安装器显示「0.9.9 → 0.9.9」，版本号从 0.9.8 起一直没变 | 版本号行有缩进（`versionCode = 69`），改版脚本用的 `^versionCode` 正则匹配不到，静默失效 | 0.10.3 | `app/build.gradle.kts` 含 `versionName = "0.10.3"`；`aapt2 dump badging` 实测同名 |
 | R-24 | 模型设置里「备用通道」下半截被底部输入框挡住，且滑不动 | 设置卡是不带约束的 Card，整列 Column 不可滚，高度超过可用空间被裁 | 0.10.3 | `MainActivity.kt` 含 `heightIn(max = capDp)` 与 `verticalScroll(rememberScrollState())` |
+| R-25 | Agent 给手工链项目引入 appcompat，下载 aar 后 `unzip` 再喂 aapt2，反复失败绕圈烧额度 | system prompt 没写「零 gradle 手工链不支持 AAR/依赖解析」，模型按常规 Android 开发习惯行事 | 0.10.4 | `AgentEngine.kt` 含 `不支持 AAR / Gradle 依赖解析` |
+| R-26 | DNS 解析失败（`Unable to resolve host`，HTTP -1）时主通道直接熄火，没有切备用 | 切换条件只写了 429，网络错误与 5xx 不在可重试集合里 | 0.10.5 | `AgentEngine.kt` 含 `retryable` 与 `code == -1` |
+| R-27 | 清单引用 `@mipmap/ic_launcher_round` 但文件不存在，aapt2 报 `not found` + `failed processing manifest` | 手工链没有 AGP 的默认图标；Agent 用 ImageMagick 造图标又没造 round 版本 | 0.10.5 | `Packager.kt` 含 `ensureIcons(` |

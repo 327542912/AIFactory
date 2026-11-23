@@ -119,6 +119,7 @@ class AgentEngine(private val ctx: Context) {
         appendLine("工作区：${workspace.path}（每个项目一个子目录）。所有文件工具只能访问工作区。")
         appendLine("工作流程：简述计划 → 用 write_file 创建/修改文件 → 用 build_apk 构建 → 失败时阅读日志、修复、重新构建（同一问题最多重试 5 次）→ 成功后汇报 APK 路径。")
         appendLine("交付闸门（硬规则，不可绕过）：build_apk 成功 ≠ 应用可用。没有调用 launch_app 真正把它启动起来，禁止说「测试通过 / 已运行 / 能正常使用」，只能说「构建成功，尚未验证运行」。装完就调 launch_app；启动失败或用户反馈闪退，先 inspect_apk 看入口 Activity 与权限，再改代码重编。")
+        appendLine("零 gradle 手工链的硬限制：不支持 AAR / Gradle 依赖解析。禁止引入 androidx、appcompat、material、kotlin 协程之外的三方库来写 UI——手工 aapt2 link 会因缺 R 符号、styleable、依赖链（core/lifecycle/savedstate…）而失败。需要界面就用 android.app.Activity + 原生 View（TextView/Button/LinearLayout）或自绘 Canvas；需要兼容库能力时用 framework 自带 API 替代。已经解压的 .aar 别继续喂 aapt2，那必然报 flat/overlay 错误。")
         appendLine("只有用户明确要求安装时才调用 install_apk。不确定环境时先调用 toolchain_status；缺少工具链时告诉用户到 设置 → Runtime 安装，不要自行下载未知来源的二进制。")
         appendLine("可以用 apt-get install / pip / npm 安装依赖。不要用 pkg（会改写软件源）。apt 的源是本项目自建仓库，只包含已发布的包；找不到时告诉用户把包名加入 GitHub 工作流的 repo_packages 重新发布。不要手动改 apt 源为官方 Termux 仓库（路径前缀不同，会损坏 Runtime）。")
         appendLine("删除、覆盖大量文件前先向用户说明。回答使用中文，简洁。")
@@ -200,17 +201,18 @@ class AgentEngine(private val ctx: Context) {
                 var throttle = 0
                 fun backoff(n: Int, hint: Int): Int =
                     if (hint > 0) hint.coerceAtMost(30) else (2 * n).coerceAtMost(20)
-                while (resp.first == 429) {
+                fun retryable(code: Int) = code == 429 || code == -1 || code in 500..599
+                while (retryable(resp.first)) {
                     if (!onBackup) {
                         if (throttle < 3) {
                             throttle++
                             val wait = backoff(throttle, lastRetryAfter)
-                            emit("模型限流（HTTP 429），" + wait + "s 后自动重试（" + throttle + "/3，主通道）")
+                            emit((if (resp.first == 429) "模型限流（HTTP 429）" else "网络失败（HTTP " + resp.first + "：" + tailText(resp.second, 120) + "）") + "，" + wait + "s 后自动重试（" + throttle + "/3，主通道）")
                             delay(wait * 1000L)
                             resp = withContext(Dispatchers.IO) { callModel(cfg) }
                         } else if (cfg.hasBackup) {
                             onBackup = true; throttle = 0
-                            emit("主通道连续限流，已切到备用通道：" + cfg.backupModel + "（步骤与上下文不丢）")
+                            emit("主通道连续失败（429/网络/5xx），已切到备用通道：" + cfg.backupModel + "（步骤与上下文不丢）")
                             resp = withContext(Dispatchers.IO) {
                                 callModel(cfg, cfg.backupBaseUrl, cfg.backupModel, cfg.backupApiKey)
                             }
@@ -219,7 +221,7 @@ class AgentEngine(private val ctx: Context) {
                         if (throttle < 3) {
                             throttle++
                             val wait = backoff(throttle, lastRetryAfter)
-                            emit("备用通道也限流（HTTP 429），" + wait + "s 后重试（" + throttle + "/3）")
+                            emit("备用通道也失败（HTTP " + resp.first + "），" + wait + "s 后重试（" + throttle + "/3）")
                             delay(wait * 1000L)
                             resp = withContext(Dispatchers.IO) {
                                 callModel(cfg, cfg.backupBaseUrl, cfg.backupModel, cfg.backupApiKey)

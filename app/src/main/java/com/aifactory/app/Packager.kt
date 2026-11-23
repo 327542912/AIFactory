@@ -212,6 +212,40 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
      * 缺 min 就直接不写进 APK，自检必挂；而按属性位置做字符串插入，遇到跨行/异常写法
      * 会切坏 XML（0.9.4 的 line 10 invalid token 就是这么来的）。
      */
+    /**
+     * 清单里 @mipmap/@drawable 引用的图标若文件不存在，aapt2 会直接失败
+     * （`mipmap/ic_launcher_round ... not found` + `failed processing manifest`）。
+     * 这里就地补一张 48x48 纯色 PNG（ic_launcher 与 ic_launcher_round 都补），
+     * 让构建先能过；用户要真图标再覆盖同名文件即可。
+     */
+    private fun ensureIcons(root: File, manifest: File, layout: Layout, onOutput: ((String) -> Unit)?) {
+        val res = layout.res ?: return
+        val text = runCatching { manifest.readText() }.getOrNull() ?: return
+        val refs = Regex("@(mipmap|drawable)/([A-Za-z0-9_]+)").findAll(text)
+            .map { it.groupValues[1] to it.groupValues[2] }.toList()
+        if (refs.isEmpty()) return
+        val dirs = listOf("mipmap-mdpi", "drawable-mdpi")
+        for ((kind, name) in refs) {
+            val exists = File(res, kind).listFiles()?.any { d ->
+                d.isDirectory && d.listFiles()?.any { f -> f.name.substringBefore('.') == name } == true
+            } == true || File(res, "drawable").listFiles()?.any { f ->
+                f.name.substringBefore('.') == name
+            } == true
+            if (exists) continue
+            if (kind != "mipmap") continue
+            for (d in dirs) {
+                val out = File(res, d).apply { mkdirs() }.let { File(it, name + ".png") }
+                runCatching {
+                    val bmp = android.graphics.Bitmap.createBitmap(48, 48, android.graphics.Bitmap.Config.ARGB_8888)
+                    bmp.eraseColor(0xFF3A5A78.toInt())
+                    out.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                    bmp.recycle()
+                    onOutput?.invoke("清单引用的 $kind/$name 不存在，已自动补 48x48 PNG：" + out.relativeTo(root).path)
+                }.onFailure { onOutput?.invoke("自动补图标失败：" + it.message) }
+            }
+        }
+    }
+
     private fun repairManifest(root: File, manifest: File, onOutput: ((String) -> Unit)?, layout: Layout? = null) {
         runCatching {
             val bak = File(manifest.parentFile, manifest.name + ".aifactory-bak")
@@ -291,6 +325,7 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
             ?: return BuildResult(false, null, "项目里找不到 AndroidManifest.xml + java 源码布局（app/src/main 或 src/main）。", "")
         val manifest = lay.manifest
         repairManifest(root, manifest, onOutput, lay)
+        ensureIcons(root, manifest, lay, onOutput)
         ensureKeystore()?.let { return BuildResult(false, null, it, "") }
 
         val jar = File(platform, "android.jar").path
