@@ -25,3 +25,4 @@
 | R-16 | 长任务跑到一半模型 429 掉线，整轮中断（`模型 API 错误(HTTP 429)`，10 次请求 9 次工具） | 只有主通道短退避（2s/4s/6s），无备用通道、无断点提示 | 0.9.8 | `AgentEngine.kt` 含 `已切到备用通道`、`hasBackup`；`MainActivity.kt` 含 `备用模型通道` |
 | R-17 | 每次切回对话页，列表从第 1 条一路滑到底，观感像在“重放” | 进入页面就用 `animateScrollToItem(最后一条)`，且滚动位置不跨 tab 保存，回页面时 listState 从 0 开始 | 0.9.8 | `MainActivity.kt` 含 `initialFirstVisibleItemIndex = ChatRunner.scrollIndex`；`Sessions.kt` 含 `var scrollIndex` |
 | R-18 | 一键发布到 GitHub 只传了 APK，AAB（上架包）留在设备里要手工搬 | `Publisher.publish` 无 AAB 分支 | 0.9.9 | `Publisher.kt` 含 `app/build/outputs/bundle/app-release.aab` |
+| R-19 | Agent 想产 AAB 却在终端手拼 `aapt2 link`，报 `failed to open magic from input: Is a directory` / `failed parsing overlays`；又 `cat .aifactory-build.sh` 报 No such file | 工具表里根本没有 `build_aab`，模型只能即兴拼命令；且脚本实际在 `<项目>/app/.aifactory-build.sh`，少一层 `app/` | 0.10.0 | `AgentEngine.kt` 含 `ToolDef("build_aab"`；`AabBuilder.kt` 用 `-R res.zip` |

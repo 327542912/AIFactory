@@ -34,7 +34,7 @@ class AgentEngine(private val ctx: Context) {
         private val LOOSE_TOOL = Regex("(?:^|\\n)[ \\t]*(?:🔧\\s*)?([a-z][a-z0-9_]{2,})\\s+(\\{[^\\n]*\\})[ \\t]*(?=\\n|$)")
     private val KNOWN_TOOLS = setOf(
         "run_shell", "read_file", "write_file", "replace_in_file", "list_dir", "toolchain_status",
-        "build_apk", "install_apk", "launch_app", "verify_app", "adb", "pipeline_status", "read_log",
+        "build_apk", "build_aab", "install_apk", "launch_app", "verify_app", "adb", "pipeline_status", "read_log",
         "download_url", "decompile_apk", "inspect_apk", "fetch_url", "remember"
     )
     private val DANGEROUS = Regex("rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*\\s+(/|~|\\\$HOME|\\\$PREFIX|/data)\\s*(\$|;|&)")
@@ -66,6 +66,8 @@ class AgentEngine(private val ctx: Context) {
             mapOf("path" to "文件路径", "old" to "要替换的原文（必须唯一）", "new" to "新文本"), listOf("path", "old", "new")),
         ToolDef("list_dir", "列出目录内容。", mapOf("path" to "相对工作区的目录，默认工作区根"), emptyList()),
         ToolDef("toolchain_status", "查看 JDK/Gradle/SDK/aapt2/apksigner 是否就绪。", emptyMap(), emptyList()),
+        ToolDef("build_aab", "产出 Google Play 的 AAB（零 gradle：aapt2 proto link + javac + d8 + bundletool + jarsigner，targetSdk 36）。想要上架包就用它，别自己在终端拼 aapt2——aapt2 的 -R 只能吃 res.zip，喂目录必报 Is a directory。",
+            mapOf("project" to "项目名（留空=当前项目）"), emptyList()),
         ToolDef("build_apk", "构建项目：有 app/src/main 布局时走本地工具链（aapt2+javac+D8+签名，零网络），并自动自检；否则走 Gradle。返回 APK 路径或错误日志。",
             mapOf("project" to "项目目录（相对工作区）", "release" to "true=签名的 release，false=debug（默认）"), listOf("project")),
         ToolDef("install_apk", "唤起系统安装器安装 APK（需要用户在弹窗中确认）。",
@@ -640,6 +642,19 @@ class AgentEngine(private val ctx: Context) {
                 mem.parentFile?.mkdirs()
                 mem.appendText("- " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date()) + " " + note + "\n")
                 "已记下。"
+            }
+            "build_aab" -> {
+                val projArg = a.optString("project").ifBlank { WorkState.currentProject ?: "" }
+                if (projArg.isBlank()) "没有指定项目，也没有当前项目。" else {
+                    val dir = resolve(projArg)
+                    if (!dir.isDirectory) "项目不存在：" + dir.path else {
+                        val builder = AabBuilder(ctx, rt)
+                        val r = Pipeline.exclusive { builder.build(dir) { line -> SessionHub.notify(line) } }
+                        if (r.ok) "【AAB 已生成】" + (r.aab?.path ?: "") + "\n" + r.message +
+                            "\nversionCode=" + r.versionCode
+                        else "【AAB 失败】" + r.message + "\n--- 日志（末尾）---\n" + tailText(r.log, 6000)
+                    }
+                }
             }
             "build_apk" -> {
                 val projArg = a.optString("project").ifBlank { WorkState.currentProject ?: "" }
