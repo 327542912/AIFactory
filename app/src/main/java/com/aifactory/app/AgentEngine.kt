@@ -26,6 +26,12 @@ class AgentEngine(private val ctx: Context) {
     private val packager = Packager(ctx, rt)
     private val workspace = RuntimePaths.workspace(ctx)
     private val history = JSONArray()
+
+    /** 被压缩掉的早前对话的要点，拼进 system prompt，保证「老需求」不会随压缩一起消失。 */
+    private val digest = StringBuilder()
+
+    /** 上下文字数预算（中文 1 字≈1 token 上下，30k 字≈20k+ tokens）。 */
+    private val historyBudget = 30000
     private var nativeTools = true
 
     companion object {
@@ -108,6 +114,7 @@ class AgentEngine(private val ctx: Context) {
     }
 
     private fun systemPrompt(): String = buildString {
+        if (digest.isNotEmpty()) { appendLine(digest.toString()); appendLine() }
         appendLine("你是 AIFactory 内置的自主软件工程师，运行在用户的 Android 手机上，拥有一个独立的类 Linux Runtime（不依赖 Termux）。")
         appendLine("工作区：${workspace.path}（每个项目一个子目录）。所有文件工具只能访问工作区。")
         appendLine("工作流程：简述计划 → 用 write_file 创建/修改文件 → 用 build_apk 构建 → 失败时阅读日志、修复、重新构建（同一问题最多重试 5 次）→ 成功后汇报 APK 路径。")
@@ -192,7 +199,7 @@ class AgentEngine(private val ctx: Context) {
                 var onBackup = false
                 var throttle = 0
                 fun backoff(n: Int, hint: Int): Int =
-                    if (hint > 0) hint.coerceAtMost(30) else (2000L * n).coerceAtMost(20000L).toInt()
+                    if (hint > 0) hint.coerceAtMost(30) else (2 * n).coerceAtMost(20)
                 while (resp.first == 429) {
                     if (!onBackup) {
                         if (throttle < 3) {
@@ -469,16 +476,50 @@ class AgentEngine(private val ctx: Context) {
     }
 
     /** 控制上下文长度：较早的工具结果压缩到 600 字符。 */
+    private fun historyChars(): Int {
+        var t = 0
+        for (i in 0 until history.length()) t += history.getJSONObject(i).optString("content", "").length
+        return t
+    }
+
+    /**
+     * 上下文预算管理（不是“只截工具输出”那种假压缩）：
+     * 1) 超预算就从最旧的一端整段丢弃，直到降到 60% 预算；
+     * 2) 丢弃前先把每轮压成一行摘要（谁说了什么、跑了什么命令、退出码、产物路径），放进 digest；
+     * 3) digest 随 system prompt 一起发，所以丢的是“原始长文本”，不是“需求本身”。
+     * 4) 丢弃边界不会把 tool 结果留在它的 tool_calls 之前，避免 400。
+     */
     private fun compactHistory() {
-        var total = 0
-        for (i in 0 until history.length()) total += history.getJSONObject(i).optString("content", "").length
-        if (total < 60000) return
-        for (i in 0 until history.length() - 8) {
-            val m = history.getJSONObject(i)
-            val c = m.optString("content", "")
-            val isTool = m.optString("role") == "tool" || c.startsWith("工具结果：")
-            if (isTool && c.length > 800) m.put("content", c.take(600) + "\n…(已压缩)")
+        val total = historyChars()
+        if (total <= historyBudget) return
+        var drop = 0
+        var remain = total
+        while (remain > historyBudget * 6 / 10 && drop < history.length() - 12) {
+            remain -= history.getJSONObject(drop).optString("content", "").length
+            drop++
         }
+        // tool 结果不能被它的调用消息抛弃：边界往后挪
+        while (drop < history.length() - 12 && history.getJSONObject(drop).optString("role") == "tool") drop++
+        if (drop <= 0) return
+        val sb = StringBuilder()
+        for (i in 0 until drop) {
+            val m = history.getJSONObject(i)
+            val role = m.optString("role")
+            val c = m.optString("content", "").replace(Regex("[ \\t]+"), " ").trim()
+            if (c.isEmpty()) continue
+            val one = when {
+                c.startsWith("工具结果") -> {
+                    val first = c.lineSequence().drop(1).firstOrNull { it.isNotBlank() }?.take(70) ?: ""
+                    val exit = Regex("退出码 (\\d+)").find(c)?.groupValues?.get(1)
+                    "[工具" + (if (exit != null) " 退出码" + exit else "") + "] " + first
+                }
+                else -> c.take(90)
+            }
+            sb.append(if (role == "assistant") "- " else "- 用户：").append(one).append('\n')
+        }
+        if (digest.length > 4000) digest.delete(0, digest.length - 4000)
+        digest.append("【早前对话摘要（原文已压缩，事实以此为准）】\n").append(sb)
+        repeat(drop) { history.remove(0) }
     }
 
     /** 服务端在 429 里给的 Retry-After（秒）；没有就是 0。 */

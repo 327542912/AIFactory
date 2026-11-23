@@ -27,3 +27,5 @@
 | R-18 | 一键发布到 GitHub 只传了 APK，AAB（上架包）留在设备里要手工搬 | `Publisher.publish` 无 AAB 分支 | 0.9.9 | `Publisher.kt` 含 `app/build/outputs/bundle/app-release.aab` |
 | R-19 | Agent 想产 AAB 却在终端手拼 `aapt2 link`，报 `failed to open magic from input: Is a directory` / `failed parsing overlays`；又 `cat .aifactory-build.sh` 报 No such file | 工具表里根本没有 `build_aab`，模型只能即兴拼命令；且脚本实际在 `<项目>/app/.aifactory-build.sh`，少一层 `app/` | 0.10.0 | `AgentEngine.kt` 含 `ToolDef("build_aab"`；`AabBuilder.kt` 用 `-R res.zip` |
 | R-20 | 「备用通道」放在设置页，用户在「模型设置」里找不到，以为根本没有多模型切换 | 入口位置与用户心智不一致（多模型属于模型设置，不属于系统设置） | 0.10.1 | `MainActivity.kt` 模型设置弹层含 `备用 API Base URL` 与 `硅基 GLM-Z1-9B` 预设 |
+| R-21 | 429 后界面显示「2000s 后自动重试」，等于挂死 | 退避单位错：把 `2000` 当秒，又乘 1000 当毫秒 | 0.10.2 | `AgentEngine.kt` 含 `(2 * n).coerceAtMost(20)` |
+| R-22 | 长任务越跑越慢、48 次请求 447s，上下文只涨不降 | `compactHistory` 只在总量>60000 字时截断工具输出，从不丢弃旧轮次，也从不给模型留下摘要 | 0.10.2 | `AgentEngine.kt` 含 `historyBudget`、`早前对话摘要` |
