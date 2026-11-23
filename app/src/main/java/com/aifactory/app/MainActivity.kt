@@ -11,6 +11,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -272,8 +273,16 @@ private fun ChatPage(
             }
         }
         if (showSettings) {
-            Card(Modifier.fillMaxWidth().padding(horizontal = 14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            // 内容比屏幕高时必须能滚：卡高封顶到屏幕 58%，里面 verticalScroll，底部输入框不再盖住备用通道
+            val capDp = (LocalConfiguration.current.screenHeightDp * 0.58f).dp
+            Card(
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp).heightIn(max = capDp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    Modifier.padding(12.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
                     OutlinedTextField(baseUrl, { baseUrl = it; cfg.baseUrl = it }, label = { Text("API Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(model, { model = it; cfg.model = it }, label = { Text("模型名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(maxSteps, { maxSteps = it; it.toIntOrNull()?.let { n -> cfg.maxSteps = n } }, label = { Text("每条消息最大工具调用次数（默认 200）") }, singleLine = true, modifier = Modifier.fillMaxWidth())

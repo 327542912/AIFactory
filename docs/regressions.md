@@ -29,3 +29,5 @@
 | R-20 | 「备用通道」放在设置页，用户在「模型设置」里找不到，以为根本没有多模型切换 | 入口位置与用户心智不一致（多模型属于模型设置，不属于系统设置） | 0.10.1 | `MainActivity.kt` 模型设置弹层含 `备用 API Base URL` 与 `硅基 GLM-Z1-9B` 预设 |
 | R-21 | 429 后界面显示「2000s 后自动重试」，等于挂死 | 退避单位错：把 `2000` 当秒，又乘 1000 当毫秒 | 0.10.2 | `AgentEngine.kt` 含 `(2 * n).coerceAtMost(20)` |
 | R-22 | 长任务越跑越慢、48 次请求 447s，上下文只涨不降 | `compactHistory` 只在总量>60000 字时截断工具输出，从不丢弃旧轮次，也从不给模型留下摘要 | 0.10.2 | `AgentEngine.kt` 含 `historyBudget`、`早前对话摘要` |
+| R-23 | 安装器显示「0.9.9 → 0.9.9」，版本号从 0.9.8 起一直没变 | 版本号行有缩进（`versionCode = 69`），改版脚本用的 `^versionCode` 正则匹配不到，静默失效 | 0.10.3 | `app/build.gradle.kts` 含 `versionName = "0.10.3"`；`aapt2 dump badging` 实测同名 |
+| R-24 | 模型设置里「备用通道」下半截被底部输入框挡住，且滑不动 | 设置卡是不带约束的 Card，整列 Column 不可滚，高度超过可用空间被裁 | 0.10.3 | `MainActivity.kt` 含 `heightIn(max = capDp)` 与 `verticalScroll(rememberScrollState())` |
