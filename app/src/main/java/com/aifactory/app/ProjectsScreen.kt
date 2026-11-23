@@ -5,7 +5,10 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -62,6 +65,27 @@ private suspend fun importArchive(ctx: Context, rt: RuntimeEngine, uri: Uri): St
             "导入失败：${e.message}"
         }
     }
+
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ProjectChip(name: String, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .16f) else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary.copy(alpha = .65f)
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = .14f)),
+        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    ) {
+        Text(
+            name,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            fontSize = 12.sp,
+            maxLines = 1,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
+}
 
 @Composable
 fun ProjectsScreen() {
@@ -238,9 +262,16 @@ fun ProjectsScreen() {
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(projects) { p ->
-                    FilterChip(selected = selected == p, onClick = { selected = p; WorkState.currentProject = p }, label = { Text(p) })
+                    ProjectChip(
+                        name = p,
+                        selected = selected == p,
+                        onClick = { selected = p; WorkState.currentProject = p },
+                        onLongClick = { confirmDelete = p }
+                    )
                 }
             }
+            Text("长按项目名 = 删除项目（会二次确认）", fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
         }
         val sel = selected
         val verdict = if (sel != null) VerifyRunner.readVerdict(File(rt.workspace, sel)) else null

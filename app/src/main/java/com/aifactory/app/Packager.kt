@@ -322,9 +322,9 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
                 val srcList = lay.javaDirs.joinToString(" ") { shQuote(it.path) }
                 if (resDir != null) {
                     appendLine("\$AAPT2 compile --dir " + q(resDir.path) + " -o \$B/res")
-                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " -R \$B/res --java \$B/gen")
+                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " -R \$B/res --java \$B/gen --min-sdk-version 26 --target-sdk-version 28")
                 } else {
-                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " --java \$B/gen")
+                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " --java \$B/gen --min-sdk-version 26 --target-sdk-version 28")
                 }
                 appendLine("find " + srcList + " \$B/gen -name \"*.java\" > \$B/srcs")
                 appendLine(q(javacBin) + " -source 8 -target 8 -bootclasspath \$JAR -d \$B/classes @\$B/srcs")
