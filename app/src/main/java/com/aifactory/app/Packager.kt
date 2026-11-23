@@ -208,8 +208,38 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
                 text = if (text.contains("</manifest>")) text.replace("</manifest>", "    " + inject + "\n</manifest>")
                 else text.replace("</application>", "</application>\n" + inject)
                 log += "补 uses-sdk(min26/target28)"
+            } else {
+                // 有 <uses-sdk> 但缺 minSdkVersion / 只写了 targetSdk：aapt2 link 会忽略命令行
+                // --min-sdk-version，直接用清单里的值，于是 APK badging 里 min 是空的，自检必挂。
+                val tag = Regex("<uses-sdk\\b[^>]*>").find(text)
+                if (tag != null) {
+                    var t = tag.value
+                    var changed = false
+                    val min = Regex("android:minSdkVersion=\"([^\"]*)\"").find(t)
+                    val minVal = min?.groupValues?.get(1) ?: ""
+                    if (min == null || minVal.toIntOrNull() == null || (minVal.toIntOrNull() ?: 0) < 21) {
+                        t = if (t.trimEnd().endsWith("/>"))
+                            t.replace(Regex("/>"), " android:minSdkVersion=\"26\" />")
+                        else
+                            t.replaceFirst(">", " android:minSdkVersion=\"26\">")
+                        log += "minSdkVersion 原为\"" + minVal + "\"，补/改为 26（aapt2 以清单为准，缺就不写进 APK）"
+                        changed = true
+                    }
+                    val tg = Regex("android:targetSdkVersion=\"([^\"]*)\"").find(t)
+                    val tgVal = tg?.groupValues?.get(1) ?: ""
+                    val tgNum = tgVal.toIntOrNull()
+                    if (tgNum == null || tgNum > 28) {
+                        t = if (tg == null) t.replaceFirst(">", " android:targetSdkVersion=\"28\">")
+                        else t.replace("android:targetSdkVersion=\"" + tgVal + "\"", "android:targetSdkVersion=\"28\"")
+                        log += "targetSdkVersion 原为\"" + tgVal + "\"，改为 28（>28 时 SELinux 拒绝 exec 私有目录 ELF）"
+                        changed = true
+                    }
+                    if (changed) text = text.substring(0, tag.range.first) + t + text.substring(tag.range.last + 1)
+                }
             }
             if (log.isNotEmpty()) {
+                val bak = File(manifest.parentFile, manifest.name + ".aifactory-bak")
+                if (!bak.exists()) runCatching { bak.writeText(manifest.readText()) }
                 manifest.writeText(text)
                 log.forEach { onOutput?.invoke("[自愈] 清单" + it) }
             }
