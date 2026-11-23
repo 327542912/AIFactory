@@ -54,6 +54,48 @@ object Publisher {
         return Result(true, "仓库就绪：" + repo, "https://github.com/" + repo)
     }
 
+
+    /** 设置页「连接」：验证 Token、拿账号名。HTTP 码原样返回，401/403 不再含糊。 */
+    fun whoami(cfg: AppConfig, onLog: (String) -> Unit): Pair<Int, String> {
+        val token = cfg.ghToken.trim()
+        if (token.isEmpty()) return 0 to "Token 为空"
+        val r = raw("GET", "$API/user", token, onLog)
+        if (r.first !in 200..299) return r.first to ("Token 无效或权限不足（HTTP " + r.first + "）：" + tail(r.second, 200))
+        val login = try { org.json.JSONObject(r.second).optString("login", "") } catch (e: Exception) { "" }
+        return if (login.isBlank()) r.first to "HTTP 200 但读不到 login" else r.first to login
+    }
+
+    /** 检查某个 owner/repo 当前 Token 是否可见（私有库需要同一账号）。 */
+    fun checkRepo(cfg: AppConfig, repo: String, onLog: (String) -> Unit): Pair<Int, String> {
+        val token = cfg.ghToken.trim()
+        if (token.isEmpty()) return 0 to "Token 为空"
+        val r = raw("GET", "$API/repos/" + repo, token, onLog)
+        return r.first to (if (r.first in 200..299) repo else "HTTP " + r.first + "：" + tail(r.second, 200))
+    }
+
+    private fun tail(s: String, n: Int): String = if (s.length <= n) s else s.substring(0, n) + "…"
+
+    private fun raw(method: String, url: String, token: String, onLog: (String) -> Unit): Pair<Int, String> {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = 20000; readTimeout = 30000
+                setRequestProperty("Authorization", "Bearer " + token)
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "AIFactory")
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            onLog("$method $url → HTTP $code")
+            code to body
+        } catch (e: Exception) {
+            onLog("请求失败：" + e.message)
+            0 to ("请求失败：" + e.message)
+        } finally { conn?.disconnect() }
+    }
+
     fun publish(
         ctx: Context,
         cfg: AppConfig,

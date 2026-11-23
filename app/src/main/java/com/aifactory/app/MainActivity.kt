@@ -32,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -376,31 +378,98 @@ private fun GitHubCard() {
     var token by remember { mutableStateOf(cfg.ghToken) }
     var tag by remember { mutableStateOf(cfg.ghTagPrefix) }
     var status by remember { mutableStateOf<String?>(null) }
+    var login by remember { mutableStateOf<String?>(null) }
     var link by remember { mutableStateOf<String?>(null) }
+    var showToken by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    fun open(url: String) {
+        try {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (e: Exception) {
+            status = "打不开浏览器：" + e.message
+        }
+    }
+    fun clipText(): String = try {
+        (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: ""
+    } catch (e: Exception) { "" }
+    fun copy(text: String) {
+        try {
+            (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("aifactory", text))
+            status = "已复制：" + text
+        } catch (e: Exception) { status = "复制失败：" + e.message }
+    }
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("发布：GitHub", fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(repo, { repo = it; cfg.ghRepo = it }, label = { Text("仓库 owner/repo（留空=自动新建同名仓库）") }, placeholder = { Text("留空即可，首次发布会自动建仓库") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(token, { token = it; cfg.ghToken = it }, label = { Text("Token（需 repo 权限）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { open("https://github.com/settings/tokens/new?scopes=repo&description=AIFactory") }) { Text("① 打开 Token 页") }
+                OutlinedButton(onClick = {
+                    val name = (WorkState.currentProject ?: "aifactory-app").lowercase().replace(Regex("[^a-z0-9._-]"), "-")
+                    open("https://github.com/new?name=" + name + "&visibility=public")
+                }) { Text("② 建仓库页") }
+            }
+            Text("① 里选 repo 权限 → Generate → 复制 github_pat_ 开头那串 → 回来粘到下面。② 可跳过：仓库留空时首次连接自动建。", fontSize = 11.sp, color = Muted)
+            OutlinedTextField(
+                token, { token = it; cfg.ghToken = it },
+                label = { Text("Token（需 repo 权限）") },
+                visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    TextButton(onClick = { showToken = !showToken }) { Text(if (showToken) "隐藏" else "显示") }
+                },
+                singleLine = true, modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { copy(token) }, enabled = token.isNotBlank()) { Text("复制 Token") }
+                TextButton(onClick = {
+                    val c = clipText()
+                    if (c.isBlank()) status = "剪贴板里没有文本；先在浏览器复制 Token"
+                    else if (!c.startsWith("gh") && c.length < 20) status = "剪贴板内容不像 Token（" + c.length + " 字符，开头 " + c.take(6) + "）"
+                    else { token = c; cfg.ghToken = c; status = "已从剪贴板填入 Token（" + c.length + " 字符）" }
+                }) { Text("从剪贴板粘贴") }
+            }
+            OutlinedTextField(repo, { repo = it; cfg.ghRepo = it }, label = { Text("仓库 owner/repo（可留空）") }, placeholder = { Text("留空 = 连接时自动新建") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(tag, { tag = it; cfg.ghTagPrefix = it }, label = { Text("tag 前缀（默认 build）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            val scope = rememberCoroutineScope()
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Button(enabled = token.isNotBlank(), onClick = {
-                    scope.launch(Dispatchers.IO) {
-                        val r = Publisher.ensureRepo(cfg, "aifactory-app") { }
+                Button(enabled = token.isNotBlank() && !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        val log = StringBuilder()
+                        val who = withContext(Dispatchers.IO) { Publisher.whoami(cfg) { log.appendLine(it) } }
+                        if (who.first !in 200..299) {
+                            withContext(Dispatchers.Main) { status = "❌ 连接失败（HTTP " + who.first + "）：" + who.second; busy = false }
+                            return@launch
+                        }
+                        val name = who.second
+                        val existing = cfg.ghRepo.trim()
+                        val r = withContext(Dispatchers.IO) {
+                            if (existing.contains("/")) {
+                                val c = Publisher.checkRepo(cfg, existing) { }
+                                if (c.first in 200..299) Publisher.Result(true, "仓库可访问：" + existing, "https://github.com/" + existing)
+                                else Publisher.Result(false, "仓库不可访问（HTTP " + c.first + "）：" + c.second, null)
+                            } else {
+                                Publisher.ensureRepo(cfg, WorkState.currentProject ?: "aifactory-app") { line -> log.appendLine(line) }
+                            }
+                        }
                         withContext(Dispatchers.Main) {
+                            login = name
                             repo = cfg.ghRepo
-                            status = if (r.ok) "✅ " + r.summary else "❌ " + r.summary
-                            link = r.releaseUrl
+                            if (r.ok) {
+                                link = r.releaseUrl
+                                status = "✅ 已连接 @" + name + "\n" + r.summary + "\n" + (r.releaseUrl ?: "")
+                            } else {
+                                status = "❌ " + r.summary
+                            }
+                            busy = false
                         }
                     }
-                }) { Text("创建 / 检查仓库") }
-                if (link != null) TextButton(onClick = {
-                    ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(link!!)))
-                }) { Text("打开仓库") }
+                }) { Text(if (busy) "正在连接…" else "③ 连接并检查") }
+                if (link != null) OutlinedButton(onClick = { open(link!!) }) { Text("打开仓库") }
+                if (link != null) TextButton(onClick = { copy(link!!) }) { Text("复制地址") }
             }
-            if (status != null) Text(status!!, fontSize = 11.sp, color = Muted)
-            Text("仓库留空时：按 Token 读账号名，用项目名自动新建 public 仓库并回填到上面。也可手填已有 owner/repo。Token 存应用私有存储。", fontSize = 11.sp, color = Muted)
+            login?.let { Text("账号：@" + it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary) }
+            status?.let { Text(it, fontSize = 11.sp, color = Muted, fontFamily = FontFamily.Monospace) }
+            Text("Token 只存应用私有存储，不会写进项目或日志。手填 owner/repo 也能用已有仓库。", fontSize = 11.sp, color = Muted)
             Text(
                 "Google Play（2026 现状，别被旧文案误导）：\n" +
                 "① 本机可以产 AAB：项目页「构建 AAB（上架）」走 aapt2 --proto-format → bundletool → jarsigner，产物在 files/outputs/*.aab。\n" +
@@ -412,7 +481,6 @@ private fun GitHubCard() {
         }
     }
 }
-
 
 @Composable
 private fun AdbCard() {

@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -30,7 +31,13 @@ class AgentEngine(private val ctx: Context) {
     companion object {
         // 小模型经常写成 ```json / ```kotlin / 裸围栏，或把参数写成 args/parameters：全都容忍
         private val FENCE = Regex("```(?:tool|tool_call|json)?\\s*([\\{\\[].*?[\\}\\]])\\s*```", RegexOption.DOT_MATCHES_ALL)
-        private val DANGEROUS = Regex("rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*\\s+(/|~|\\\$HOME|\\\$PREFIX|/data)\\s*(\$|;|&)")
+        private val LOOSE_TOOL = Regex("(?:^|\\n)[ \\t]*(?:🔧\\s*)?([a-z][a-z0-9_]{2,})\\s+(\\{[^\\n]*\\})[ \\t]*(?=\\n|$)")
+    private val KNOWN_TOOLS = setOf(
+        "run_shell", "read_file", "write_file", "replace_in_file", "list_dir", "toolchain_status",
+        "build_apk", "install_apk", "launch_app", "verify_app", "adb", "pipeline_status", "read_log",
+        "download_url", "decompile_apk", "inspect_apk", "fetch_url", "remember"
+    )
+    private val DANGEROUS = Regex("rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*\\s+(/|~|\\\$HOME|\\\$PREFIX|/data)\\s*(\$|;|&)")
     }
 
     fun reset() {
@@ -178,6 +185,14 @@ class AgentEngine(private val ctx: Context) {
                 compactHistory()
                 requests++; steps = step
                 var resp = withContext(Dispatchers.IO) { callModel(cfg) }
+                // 免费模型常被限流（GLM 的 1305 / 429）。退避重试 3 次，别把用户扔在错误页
+                var throttle = 0
+                while (resp.first == 429 && throttle < 3) {
+                    throttle++
+                    emit("模型限流（HTTP 429），" + (2 * throttle) + "s 后自动重试（" + throttle + "/3）")
+                    delay(2000L * throttle)
+                    resp = withContext(Dispatchers.IO) { callModel(cfg) }
+                }
                 if (resp.first == 400 && nativeTools && resp.second.contains("tool", ignoreCase = true)) {
                     nativeTools = false
                     emit("服务端不支持原生工具调用，已切换到文本协议。")
@@ -239,6 +254,24 @@ class AgentEngine(private val ctx: Context) {
                         "原因通常是当前模型不支持工具调用（qwen3.5-4B 这类小模型常见）：请在模型设置里换成支持 tools 的模型（如 qwen3-30B-A3B、glm-4、deepseek-chat），或把 Agent 开关关掉再纯聊天。"
                 }
 
+                // 模型有时把调用写成正文一行：🔧 list_dir {"path":"."}。以前这行会被当成“已执行”显示出去，
+                // 而计数器是 0 次——等于骗人。这里按已知工具名真执行。
+                val loose = if ((calls == null || calls.length() == 0) && FENCE.find(content) == null) looseToolCall(content) else null
+                if (loose != null) {
+                    history.put(JSONObject().put("role", "assistant").put("content", content))
+                    val before = content.replaceRange(loose.third, "").trim()
+                    if (before.isNotEmpty()) emit(before)
+                    emit("🔧 " + loose.first + " " + briefArgs(loose.second) + "（模型写在正文里，已真实执行）")
+                    toolCalls++
+                    val r = runTool(loose.first, loose.second)
+                    if (loose.first == "build_apk") buildOk = !(r.startsWith("❌") || r.contains("构建失败") || r.contains("失败："))
+                    emit("↳ " + tailText(r, 500))
+                    history.put(JSONObject().put("role", "user").put("content", "工具结果：\n" + tailText(r, 12000)))
+                    noteSig(loose.first + loose.second.toString() + r.hashCode())
+                    if (repeats >= 8) return "检测到连续 8 次完全相同的操作和结果，已暂停。请告诉我新的方向，或回复“继续”。"
+                    continue
+                }
+
                 // 原生工具没给调用、但正文里有围栏 JSON 时也执行（小模型混用两种格式很常见）
                 val fenced = FENCE.find(content)
                 if (fenced != null) {
@@ -274,7 +307,9 @@ class AgentEngine(private val ctx: Context) {
                     continue
                 }
                 history.put(JSONObject().put("role", "assistant").put("content", content))
-                return content.ifBlank { "（模型没有返回内容）" }
+                val warn = if (toolCalls == 0)
+                    "【未执行】本轮没有发生任何真实工具调用：下面只是模型的文字输出，文件/终端/构建都没有动过。\n\n" else ""
+                return warn + content.ifBlank { "（模型没有返回内容）" }
             }
             return "已达到本轮工具调用上限（$limit 次），任务暂停。回复“继续”我接着做，或在模型设置里调大上限。"
         } catch (e: CancellationException) {
@@ -438,6 +473,20 @@ class AgentEngine(private val ctx: Context) {
     }
 
     // ---------- 工具实现 ----------
+
+
+    /** 从正文里认出 `[🔧] name {json}` 这种行（每行一个），只认已知工具名。 */
+    private fun looseToolCall(text: String): Triple<String, JSONObject, IntRange>? {
+        var best: Triple<String, JSONObject, IntRange>? = null
+        for (m in LOOSE_TOOL.findAll(text)) {
+            val name = m.groupValues[1]
+            if (name !in KNOWN_TOOLS) continue
+            val args = try { parseArgs(m.groupValues[2]) } catch (e: Exception) { continue }
+            val r = m.range
+            if (best == null || r.first < best!!.third.first) best = Triple(name, args, r)
+        }
+        return best
+    }
 
     private fun resolve(p: String): File {
         // 相对路径优先落在「当前项目」里：模型写 app/src/main/... 时是想改当前工程，

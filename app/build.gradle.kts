@@ -12,8 +12,8 @@ android {
         minSdk = 26
         // 必须 <= 28：Android 10+ 对 targetSdk>=29 的应用禁止执行私有目录里的二进制（Runtime 依赖这一点）
         targetSdk = 28
-        versionCode = 61
-        versionName = "0.9.1"
+        versionCode = 62
+        versionName = "0.9.2"
     }
     signingConfigs {
         // 固定签名：CI 每次构建用同一个 keystore，否则签名变了就只能卸载重装，
