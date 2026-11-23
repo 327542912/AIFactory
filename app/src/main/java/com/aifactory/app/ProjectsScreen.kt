@@ -287,13 +287,33 @@ fun ProjectsScreen() {
                 fontSize = 11.sp, color = color
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(enabled = selected != null && !busy, onClick = { runBuild(false) }) { Text("构建 Debug") }
+        // 七个按钮塞一个 Row 会被手机宽度挤成多行、被容器裁成半截字（真机截图验证过）。
+        // 改成两行、按用途分组，每行可横滚，按钮文字不换行。
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(enabled = selected != null && !busy, onClick = { runBuild(false) }) { Text("构建 Debug", maxLines = 1, softWrap = false) }
             Button(enabled = selected != null && !busy, onClick = {
                 val name = selected ?: return@Button
                 Pipeline.buildProject(ctx, pk, File(rt.workspace, name), false, install = true)
-            }) { Text("构建并安装") }
-            Button(enabled = selected != null && !busy, onClick = { runBuild(true) }) { Text("构建 Release（签名）") }
+            }) { Text("构建并安装", maxLines = 1, softWrap = false) }
+            Button(enabled = selected != null && !busy, onClick = { runBuild(true) }) { Text("构建 Release（签名）", maxLines = 1, softWrap = false) }
+            OutlinedButton(enabled = selected != null && !busy, onClick = {
+                val name = selected ?: return@OutlinedButton
+                Pipeline.buildAab(ctx, rt, File(rt.workspace, name))
+            }) { Text("构建 AAB（上架）", maxLines = 1, softWrap = false) }
+        }
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(enabled = selected != null && !busy, onClick = {
+                val name = selected ?: return@OutlinedButton
+                Pipeline.verifyProject(ctx, rt, File(rt.workspace, name))
+            }) { Text("验证运行", maxLines = 1, softWrap = false) }
             OutlinedButton(enabled = selected != null && !busy, onClick = {
                 val name = selected ?: return@OutlinedButton
                 val cfg = AppConfig(ctx)
@@ -307,22 +327,14 @@ fun ProjectsScreen() {
                     val r = Publisher.publish(ctx, cfg, dir, br.apk, notes) { line -> report(line) }
                     if (r.ok) "✅ " + r.summary + "\n" + (r.releaseUrl ?: "") else "❌ " + r.summary
                 }
-            }) { Text("发布到 GitHub") }
-            OutlinedButton(enabled = selected != null && !busy, onClick = {
-                val name = selected ?: return@OutlinedButton
-                Pipeline.buildAab(ctx, rt, File(rt.workspace, name))
-            }) { Text("构建 AAB（上架）") }
-            OutlinedButton(enabled = selected != null && !busy, onClick = {
-                val name = selected ?: return@OutlinedButton
-                Pipeline.verifyProject(ctx, rt, File(rt.workspace, name))
-            }) { Text("验证运行") }
-            OutlinedButton(enabled = selected != null && !busy, onClick = { confirmDelete = selected }) { Text("删除项目") }
-            if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队") }
+            }) { Text("发布到 GitHub", maxLines = 1, softWrap = false) }
+            OutlinedButton(enabled = selected != null && !busy, onClick = { confirmDelete = selected }) { Text("删除项目", maxLines = 1, softWrap = false) }
+            if (busy) TextButton(onClick = { Pipeline.clearQueue() }) { Text("清空排队", maxLines = 1, softWrap = false) }
             TextButton(onClick = {
                 val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("aifactory-log", Pipeline.log))
                 Pipeline.appendNote("已复制日志（" + Pipeline.log.length + " 字）到剪贴板")
-            }) { Text("复制日志") }
+            }) { Text("复制日志", maxLines = 1, softWrap = false) }
         }
         if (busy) {
             LinearProgressIndicator(Modifier.fillMaxWidth())

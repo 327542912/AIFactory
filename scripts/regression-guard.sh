@@ -30,4 +30,5 @@ need VerifyRunner.kt "verify.json" "R-12"
 need AgentEngine.kt "launch_app" "R-12"
 need ProjectsScreen.kt "combinedClickable" "R-14"
 need ProjectsScreen.kt "长按项目名" "R-14"
+need ProjectsScreen.kt "softWrap = false" "R-15"
 if [ "$fail" = "0" ]; then echo "== 全部通过 =="; else echo "== 有回归 =="; exit 1; fi

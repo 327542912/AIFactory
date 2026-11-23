@@ -20,3 +20,4 @@
 | R-12 | “构建成功”就宣称测试通过，实际没启动 | 没有启动闸门 | 0.8.3 | `AgentEngine.kt` 含 `launch_app`；`VerifyRunner.kt` 含 `verify.json` |
 | R-13 | `apt install android-tools` 报 `Unable to locate package` | 本地 apt 源只有 261 包，不含 android-tools（需 CI 用本前缀编译） | 未修（待 runtime workflow） | `AdbBridge.kt` 存在；设置页 AdbCard 给出“必须在 CI 编”的说明 |
 | R-14 | 长按项目名没有删除入口（只能先选中再点底部按钮，小屏会被挤） | 项目 chip 用 `FilterChip`，不支持长按 | 0.9.7 | `ProjectsScreen.kt` 含 `combinedClickable` 与 `长按项目名` |
+| R-15 | 真机截图上「构建 Debug / 构建并安装 / Release」按钮被裁成半截字，点不到 | 7 个按钮塞进一个 `Row`，窄屏被压缩换行、被容器高度裁切 | 0.9.8 | `ProjectsScreen.kt` 含 `horizontalScroll(rememberScrollState())` 与 `softWrap = false` |
