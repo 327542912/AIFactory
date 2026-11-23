@@ -1,0 +1,103 @@
+name: AIFactory Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - app-0.2.2
+      - aifactory-complete-implementation-20261121
+    paths:
+      - "app/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - ".github/workflows/android-build.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aifactory-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-debug:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon --stacktrace --max-workers=2
+
+      - name: Verify APK
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: aifactory-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # 让仓库里的 apk/AIFactory-latest.apk 永远是最新的（手机端可一键下载）
+      - name: Sync APK into main:apk/
+        run: |
+          set -euo pipefail
+          VER=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          mkdir -p /tmp/apkout
+          cp app/build/outputs/apk/debug/app-debug.apk "/tmp/apkout/AIFactory-${VER}-debug.apk"
+          cp "/tmp/apkout/AIFactory-${VER}-debug.apk" /tmp/apkout/AIFactory-latest.apk
+          (cd /tmp/apkout && for f in *.apk; do sha256sum "$f" > "$f.sha256"; done)
+          git config user.name "aifactory-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git fetch --depth 1 origin main
+          git checkout -B main FETCH_HEAD
+          rm -rf apk && mkdir -p apk
+          cp /tmp/apkout/*.apk /tmp/apkout/*.sha256 apk/
+          git add apk
+          if git diff --cached --quiet; then echo "apk 无变化，跳过提交"; exit 0; fi
+          git commit -m "apk: sync ${VER} (${GITHUB_SHA:0:8})"
+          git push origin main
+
+      # apk-latest 这个 tag 常被直接引用（设置有默认值/文档里写死），必须跟着构建一起更新
+      - name: Publish APK to release apk-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view apk-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create apk-latest --repo "$GITHUB_REPOSITORY" --title "APK (rolling latest)" \
+              --notes "每次 android-build 成功后自动替换。仓库 main:apk/ 下有同名文件。"
+          # 旧版本号资产删掉，避免 0.2.4 / 0.2.5 并存让人下错
+          for a in $(gh release view apk-latest --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name'); do
+            case "$a" in AIFactory-*.apk|AIFactory-*.apk.sha256)
+              cur=$(gh release view apk-latest --repo "$GITHUB_REPOSITORY" --json assets -q ".assets[]|select(.name==\"$a\")|.name")
+              [ -n "$cur" ] && gh release delete-asset apk-latest "$a" -y ;;
+            esac
+          done
+          gh release upload apk-latest --repo "$GITHUB_REPOSITORY" --clobber \
+            /tmp/apkout/*.apk /tmp/apkout/*.sha256

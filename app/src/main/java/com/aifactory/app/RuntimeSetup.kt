@@ -1,0 +1,210 @@
+package com.aifactory.app
+
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/** 取 SAF Uri 的显示文件名，用于给本地仓库里的 deb 保名。 */
+private fun displayName(ctx: android.content.Context, uri: Uri): String? = runCatching {
+    ctx.contentResolver.query(
+        uri,
+        arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+        null, null, null
+    )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+}.getOrNull()
+
+/** 设置页里的 Runtime / SDK 安装卡片（取代原来的 Termux 连接说明）。 */
+@Composable
+fun RuntimeSetupCard() {
+    val ctx = LocalContext.current
+    val cfg = remember { AppConfig(ctx) }
+    val rt = remember { RuntimeEngine(ctx) }
+    // 安装状态放在进程级 SetupRunner：切页面不会取消下载/解压，也不会丢进度
+    val status = SetupRunner.status
+    val progress = SetupRunner.progress
+    val busy = SetupRunner.busy
+    var bootUrl by remember { mutableStateOf(cfg.bootstrapUrl) }
+    var bootSha by remember { mutableStateOf(cfg.bootstrapSha) }
+    var sdkUrl by remember { mutableStateOf(cfg.sdkUrl) }
+    var repoUrl by remember { mutableStateOf(cfg.repoUrl) }
+    var mirror by remember { mutableStateOf(cfg.mirrorPrefix) }
+    LaunchedEffect(Unit) { SetupRunner.recompute(ctx) }
+
+    val bootPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) SetupRunner.run(ctx) {
+            ArchiveInstaller.installBootstrap(ctx, { ctx.contentResolver.openInputStream(uri)!! }) { msg -> SetupRunner.report(msg) }
+        }
+    }
+    val sdkPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) SetupRunner.run(ctx) {
+            ArchiveInstaller.installSdk(ctx, { ctx.contentResolver.openInputStream(uri)!! }) { msg -> SetupRunner.report(msg) }
+        }
+    }
+
+    val debPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris: List<Uri> ->
+        if (!uris.isNullOrEmpty()) SetupRunner.run(ctx) {
+            val repo = LocalRepo.dir(ctx)
+            val saved = ArrayList<File>()
+            withContext(Dispatchers.IO) {
+                uris.forEachIndexed { i, u ->
+                    val nm = displayName(ctx, u) ?: ("pkg-" + i + ".deb")
+                    val safe = nm.replace('/', '_')
+                    val f = File(repo, if (safe.endsWith(".deb")) safe else safe + ".deb")
+                    ctx.contentResolver.openInputStream(u)!!.use { ins -> f.outputStream().use { ins.copyTo(it) } }
+                    saved += f
+                }
+            }
+            LocalRepo.stageBundled(ctx)
+            // 拒收官方 termux 包：它们把前缀写死成 com.termux，装进来会毁掉 bash/apt
+            val rejected = ArrayList<String>()
+            val picked = ArrayList<File>()
+            for (f in saved) {
+                if (withContext(Dispatchers.IO) { LocalRepo.isForeignPrefix(rt, repo, f) }) {
+                    rejected += f.name
+                    f.delete()
+                } else picked += f
+            }
+            if (picked.isEmpty()) {
+                SetupRunner.report("选中的 .deb 全是官方 Termux 包（内部路径是 com.termux），已全部拒收：\n" + rejected.joinToString("\n"))
+                return@run
+            }
+            SetupRunner.report("已拷入 " + picked.size + " 个 deb（" + (picked.sumOf { it.length() } / 1048576) + " MB），生成本地索引…")
+            val (ok, info) = withContext(Dispatchers.IO) { LocalRepo.rebuild(ctx, rt) }
+            if (!ok) {
+                SetupRunner.report("本地索引生成失败：" + info)
+                return@run
+            }
+            LocalRepo.ensureSource(ctx)
+            // 只装「这次选进来的 + 内置库包」，不碰仓库里其它残留
+            val bundled = listOf("libandroid-shmem", "libandroid-spawn", "libjpeg-turbo", "littlecms")
+            val names = (withContext(Dispatchers.IO) {
+                picked.map { LocalRepo.packageName(rt, repo, it) }
+            } + bundled).filter { it.isNotBlank() }.distinct()
+            SetupRunner.report("本次安装： " + names.joinToString(" ") +
+                (if (rejected.isEmpty()) "" else "（已拒收 " + rejected.size + " 个官方 Termux 包）") + "，开始…")
+            val nm = names.joinToString(" ")
+            val cmd = "dpkg --configure -a >/dev/null 2>&1; " +
+                "apt-get update -o Acquire::Retries=0 2>&1 | tail -6; " +
+                "{ apt-get install -y " + nm + " 2>&1 || { dpkg -P apt-ftptarchive apt-transport-tor db >/dev/null 2>&1; apt-get install -y " + nm + " 2>&1; }; }"
+            val r = rt.run(cmd, repo, 3600) { SetupRunner.report(tailText(it, 1400)) }
+            if (!r.ok) {
+                SetupRunner.report("apt 未能解析，改用 dpkg 直装（只装本次的包）…")
+                val files = picked.map { it.name }.joinToString(" ") +
+                    " libandroid-shmem_*.deb libandroid-spawn_*.deb libjpeg-turbo_*.deb littlecms_*.deb"
+                val fb = rt.run("dpkg -i --force-depends " + files + " 2>&1 | tail -20", repo, 3600) { SetupRunner.report(tailText(it, 1200)) }
+                SetupRunner.report((if (fb.ok) "dpkg 直装结束（退出 0）。" else "dpkg 直装退出码 " + fb.exitCode + "。") + "\n" + tailText(fb.output, 700))
+            } else {
+                SetupRunner.report("本地包安装完成。")
+            }
+            // 装完自检：java 到底能不能跑，缺的是哪个 .so
+            val probe = rt.run(
+                "P=\$PREFIX; if [ -x \"\$P/bin/java\" ]; then \"\$P/bin/java\" -version 2>&1 | head -8; " +
+                    "else echo 'bin/java 不存在（postinst 未执行成功）'; fi; echo ---; dpkg -l 2>/dev/null | grep -v '^ii' | tail -12",
+                repo, 300
+            )
+            SetupRunner.report("安装自检：\n" + tailText(probe.output, 1400))
+        }
+    }
+
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Runtime（独立于 Termux）", fontWeight = FontWeight.SemiBold)
+            Text(status, fontSize = 12.sp, lineHeight = 18.sp)
+            if (busy) Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(progress, fontSize = 12.sp)
+            } else if (progress.isNotBlank()) Text(progress, fontSize = 12.sp, lineHeight = 17.sp)
+
+            HorizontalDivider()
+            OutlinedTextField(mirror, { mirror = it; cfg.mirrorPrefix = it },
+                label = { Text("下载加速前缀（可选，作用于下面两个下载）") },
+                placeholder = { Text("https://ghproxy.net") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Text("填 https://ghproxy.net 就变成 https://ghproxy.net/https://github.com/…；只加一层代理，sha256 仍按原文件校验。软件源也可以这么写。",
+                fontSize = 11.sp, lineHeight = 15.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .55f))
+
+            HorizontalDivider()
+            Text("1. 安装 Runtime（bootstrap-aarch64.zip）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            OutlinedTextField(bootUrl, { bootUrl = it; cfg.bootstrapUrl = it }, label = { Text("下载地址（GitHub Release）") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(bootSha, { bootSha = it; cfg.bootstrapSha = it }, label = { Text("SHA-256（可选）") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = !busy && bootUrl.isNotBlank(), onClick = {
+                    SetupRunner.run(ctx) { ArchiveInstaller.installBootstrapFromUrl(ctx, bootUrl.trim(), bootSha, mirror, { msg -> SetupRunner.report(msg) }) }
+                }) { Text("下载并安装") }
+                OutlinedButton(enabled = !busy, onClick = { bootPicker.launch(arrayOf("*/*")) }) { Text("选择本地 zip") }
+            }
+
+            HorizontalDivider()
+            Text("2. 软件源（apt-get install 使用）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            OutlinedTextField(repoUrl, { repoUrl = it; cfg.repoUrl = it }, label = { Text("apt 软件源地址") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Button(enabled = !busy && rt.isInstalled() && repoUrl.isNotBlank(), onClick = {
+                SetupRunner.run(ctx) {
+                    val u = rt.configureAptRepo(repoUrl, cfg.extraRepoUrl)
+                    SetupRunner.report("已写入软件源 $u，正在 apt update…")
+                    val r = rt.run("apt-get update 2>&1", RuntimePaths.home(ctx), 300)
+                    SetupRunner.report((if (r.ok) "软件源可用。" else "apt update 失败（退出码 ${r.exitCode}）：") +
+                        "\n" + tailText(r.output, 900))
+                }
+            }) { Text("写入软件源并更新") }
+
+            HorizontalDivider()
+            Text("3. 安装 Android SDK（zip，含 platforms / build-tools）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            OutlinedTextField(sdkUrl, { sdkUrl = it; cfg.sdkUrl = it }, label = { Text("SDK 下载地址") },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = !busy && sdkUrl.isNotBlank(), onClick = {
+                    SetupRunner.run(ctx) { ArchiveInstaller.installSdkFromUrl(ctx, sdkUrl.trim(), mirror, { msg -> SetupRunner.report(msg) }) }
+                }) { Text("下载并安装") }
+                OutlinedButton(enabled = !busy, onClick = { sdkPicker.launch(arrayOf("*/*")) }) { Text("选择本地 zip") }
+            }
+            HorizontalDivider()
+            Text("4. 本地安装包（.deb）", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("网速拉不动 105 MB 的 JDK 时：用浏览器/电脑把 deb 下到手机，选进来由 apt 装，依赖仍从上面那个软件源补。可多选。",
+                fontSize = 11.sp, lineHeight = 15.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f))
+            OutlinedButton(enabled = !busy && rt.isInstalled(), onClick = {
+                debPicker.launch(arrayOf("application/vnd.debian.binary-package", "application/octet-stream", "*/*"))
+            }) { Text("选择本地 .deb") }
+            OutlinedButton(enabled = !busy && rt.isInstalled(), onClick = {
+                SetupRunner.run(ctx) {
+                    val r = rt.run("dpkg --configure -a 2>&1 | tail -5; echo ---; dpkg -l 2>/dev/null | grep -v '^ii' | tail -25", RuntimePaths.home(ctx), 300)
+                    SetupRunner.report("dpkg 状态检查：\n" + tailText(r.output, 1200))
+                }
+            }) { Text("修复 dpkg 状态") }
+            OutlinedButton(enabled = !busy && rt.isInstalled(), onClick = {
+                SetupRunner.run(ctx) {
+                    val cmd = "pkill -9 -f 'bin/apt-get' 2>/dev/null; pkill -9 -f 'bin/dpkg' 2>/dev/null; sleep 1; " +
+                        "rm -f \"\$PREFIX/var/lib/dpkg/lock-frontend\" \"\$PREFIX/var/lib/dpkg/lock\" \"\$PREFIX/var/lib/apt/lists/lock\"; " +
+                        "dpkg --configure -a 2>&1 | tail -8"
+                    val x = rt.run(cmd, RuntimePaths.home(ctx), 300)
+                    SetupRunner.report("已强制清理锁并重配：\n" + tailText(x.output, 1000))
+                }
+            }) { Text("清理卡死的 apt/dpkg 锁") }
+
+            Text(
+                "Runtime 与 SDK 都由本仓库的 GitHub Actions 构建（包名 com.aifactory.app）。SDK 内含 platforms/android-34/35/36 与 build-tools/34.0.0/35.0.0/36.0.0，" +
+                    "其中 aapt2 / zipalign / aapt / aidl 是编译好的 aarch64 静态二进制（官方包是 x86_64，手机上跑不起来）。地址已默认填好，直接点「下载并安装」。\n\n" +
+                    "下载会手动跟随 GitHub 的 302 跳转；中断后按 HTTP Range 断点续传，最多重试 5 次，残包留在缓存里，再点一次接着下。",
+                fontSize = 11.sp, lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = .6f)
+            )
+        }
+    }
+}

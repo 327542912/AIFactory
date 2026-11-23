@@ -32,7 +32,6 @@ jobs:
       - name: Normalize prefix
         env:
           RUNTIME_REPO_URL: https://github.com/${{ github.repository }}/releases/download/runtime-repo/
-          RUNTIME_EXTRA_URL: https://github.com/${{ github.repository }}/releases/download/runtime-extra/
         run: bash .github/scripts/normalize-bootstrap-prefix.sh bootstrap-aarch64.zip
 
       - name: Verify
@@ -47,8 +46,6 @@ jobs:
           grep -q '^#!/data/data/com.aifactory.app/files/usr/bin/bash' chk/var/lib/dpkg/info/termux-tools.preinst
           grep -q 'deb \[trusted=yes\] https://github.com/.*/releases/download/runtime-repo/ ./' chk/etc/apt/sources.list
           grep -q '^# deb https://packages-cf.termux.dev' chk/etc/apt/sources.list
-          grep -q 'releases/download/runtime-extra/ ./' chk/etc/apt/sources.list
-          echo "extra repo line present"
           echo "prefix checks passed"
           rm -rf chk
 

@@ -1,0 +1,232 @@
+package com.aifactory.app
+
+import android.content.Context
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+
+/**
+ * 发布到 GitHub Releases。
+ *
+ * 为什么不是“一键上架应用商店”：Google Play 只收 AAB（本机没有 bundletool，也拿不到
+ * Play 服务账号），且需要开发者账号与审核；GitHub Releases 是唯一能在设备上真闭环的发布通道：
+ * 源码 zip + 签名 APK 一起上传，别人能下载安装。
+ *
+ * 全程走 GitHub REST API，不依赖 curl/git：curl 在 Runtime 里未必有，git 需要额外装。
+ */
+object Publisher {
+
+    private const val API = "https://api.github.com"
+
+    data class Result(val ok: Boolean, val summary: String, val releaseUrl: String?)
+
+    /** 设置页「创建/检查仓库」：不发布，只把仓库建好并把地址回填进设置。 */
+    fun ensureRepo(cfg: AppConfig, nameHint: String, onLog: (String) -> Unit): Result {
+        val token = cfg.ghToken.trim()
+        if (token.isEmpty()) return Result(false, "先填 Token（需 repo 权限），否则读不到账号也建不了仓库。", null)
+        val existing = cfg.ghRepo.trim()
+        if (existing.contains("/")) {
+            val v = raw("GET", "$API/repos/$existing", token, onLog = onLog)
+            return if (v.first in 200..299) Result(true, "仓库已存在：" + existing, "https://github.com/" + existing)
+            else when (v.first) {
+                404 -> Result(false, "仓库 $existing 不存在（HTTP 404）：名字拼错了，或它属于别人/私有库而 Token 看不到。", null)
+                401, 403 -> Result(false, "Token 无权访问 $existing（HTTP " + v.first + "）：Personal token 要勾 repo；Fine-grained 要给 Contents 读 + Administration 写。", null)
+                else -> Result(false, "读取仓库失败（HTTP " + v.first + "）：" + tail(v.second, 200), null)
+            }
+        }
+        val w = raw("GET", "$API/user", token, onLog = onLog)
+        val login = try { org.json.JSONObject(w.second).optString("login", "") } catch (e: Exception) { "" }
+        if (w.first !in 200..299 || login.isBlank()) return Result(false, "Token 无效（HTTP " + w.first + "）：" + tail(w.second, 200), null)
+        val name = nameHint.lowercase().replace(Regex("[^a-z0-9._-]"), "-").trim('-').ifBlank { "aifactory-app" }
+        val repo = login + "/" + name
+        val exists = request("GET", "$API/repos/$repo", token, null, "application/json", { })
+        if (exists == null) {
+            onLog("新建 public 仓库 $repo …")
+            val made = raw("POST", "$API/user/repos", token,
+                ("{\"name\":\"" + name + "\",\"private\":false,\"auto_init\":true}").toByteArray(),
+                "application/json", onLog)
+            if (made.first !in 200..299) return Result(false, "建仓失败（HTTP " + made.first + "）：" + tail(made.second, 300) + "\n常见原因：Personal token 没勾 repo；Fine-grained 缺 Administration(写)。", null)
+            onLog("已新建：https://github.com/$repo")
+        } else {
+            onLog("已存在，直接复用：$repo")
+        }
+        cfg.ghRepo = repo
+        return Result(true, "仓库就绪：" + repo, "https://github.com/" + repo)
+    }
+
+
+    /** 设置页「连接」：验证 Token、拿账号名。HTTP 码原样返回，401/403 不再含糊。 */
+    fun whoami(cfg: AppConfig, onLog: (String) -> Unit): Pair<Int, String> {
+        val token = cfg.ghToken.trim()
+        if (token.isEmpty()) return 0 to "Token 为空"
+        val r = raw("GET", "$API/user", token, onLog = onLog)
+        if (r.first !in 200..299) return r.first to ("Token 无效或权限不足（HTTP " + r.first + "）：" + tail(r.second, 200))
+        val login = try { org.json.JSONObject(r.second).optString("login", "") } catch (e: Exception) { "" }
+        return if (login.isBlank()) r.first to "HTTP 200 但读不到 login" else r.first to login
+    }
+
+    /** 检查某个 owner/repo 当前 Token 是否可见（私有库需要同一账号）。 */
+    fun checkRepo(cfg: AppConfig, repo: String, onLog: (String) -> Unit): Pair<Int, String> {
+        val token = cfg.ghToken.trim()
+        if (token.isEmpty()) return 0 to "Token 为空"
+        val r = raw("GET", "$API/repos/" + repo, token, onLog = onLog)
+        return r.first to (if (r.first in 200..299) repo else "HTTP " + r.first + "：" + tail(r.second, 200))
+    }
+
+    private fun tail(s: String, n: Int): String = if (s.length <= n) s else s.substring(0, n) + "…"
+
+    private fun raw(method: String, url: String, token: String, body: ByteArray? = null, type: String = "application/json", onLog: (String) -> Unit = {}): Pair<Int, String> {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = 20000; readTimeout = 30000
+                setRequestProperty("Authorization", "Bearer " + token)
+                setRequestProperty("Accept", "application/vnd.github+json")
+                setRequestProperty("User-Agent", "AIFactory")
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", type)
+                    setRequestProperty("Content-Length", body.size.toString())
+                    outputStream.use { it.write(body) }
+                }
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            onLog("$method $url → HTTP $code")
+            code to body
+        } catch (e: Exception) {
+            onLog("请求失败：" + e.message)
+            0 to ("请求失败：" + e.message)
+        } finally { conn?.disconnect() }
+    }
+
+    fun publish(
+        ctx: Context,
+        cfg: AppConfig,
+        projectDir: File,
+        apk: File?,
+        notes: String,
+        onLog: (String) -> Unit
+    ): Result {
+        val token = cfg.ghToken.trim()
+        if (token.isEmpty()) return Result(false, "没有配置 GitHub Token（设置 → 发布：GitHub）。", null)
+        var repo = cfg.ghRepo.trim()
+        // 留空 = 自动在当前账号下新建同名仓库（仓库名取项目名），成功后回填到设置里
+        if (repo.isEmpty()) {
+            val login = request("GET", "$API/user", token, null, "application/json", onLog)?.optString("login", "")
+            if (login.isNullOrBlank()) return Result(false, "读不到 GitHub 账号信息，检查 Token 是否有效。", null)
+            val repoName = projectDir.name.lowercase().replace(Regex("[^a-z0-9._-]"), "-").trim('-').ifBlank { "aifactory-app" }
+            repo = login + "/" + repoName
+            val exists = request("GET", "$API/repos/$repo", token, null, "application/json", { })
+            if (exists == null) {
+                onLog("仓库 $repo 不存在，自动新建（public）…")
+                val made = request("POST", "$API/user/repos", token,
+                    ("{\"name\":\"" + repoName + "\",\"private\":false,\"auto_init\":true}").toByteArray(),
+                    "application/json", onLog)
+                if (made == null) return Result(false, "自动新建仓库失败：$repo", null)
+                onLog("已新建仓库：https://github.com/$repo")
+            } else {
+                onLog("使用已有仓库：$repo")
+            }
+            cfg.ghRepo = repo
+        }
+        if (!repo.contains("/")) return Result(false, "仓库要写成 owner/repo，现在是：$repo", null)
+
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        val tag = (cfg.ghTagPrefix.ifBlank { "build" }) + "-" + stamp
+        val name = projectDir.name + "-" + stamp
+
+        // 1) 源码 zip（排除 build 产物，避免把几百 MB 中间文件传上去）
+        onLog("打包源码 zip …")
+        val zip = File(ctx.cacheDir, name + "-src.zip")
+        runCatching { zipProject(projectDir, zip) }
+            .onFailure { return Result(false, "源码打包失败：" + it.message, null) }
+        onLog("源码包 " + zip.length() + " B")
+
+        // 2) 建 release
+        val body = """{"tag_name":"$tag","name":"$name","body":${json(notes.ifBlank { "自动发布：$name" })}, "draft":false,"prerelease":false}"""
+        val created = request("POST", "$API/repos/$repo/releases", token, body.toByteArray(), "application/json", onLog)
+        if (created == null) return Result(false, "创建 Release 失败（检查 token 是否有 repo 权限、仓库是否存在）。", null)
+        val releaseId = created.optLong("id", 0)
+        val htmlUrl = created.optString("html_url", "")
+        onLog("Release 已创建：$htmlUrl")
+
+        // 3) 上传源码 zip
+        uploadAsset(repo, releaseId, token, zip, name + "-src.zip", onLog)
+        // 4) 上传 APK（有就传）
+        if (apk != null && apk.exists()) {
+            uploadAsset(repo, releaseId, token, apk, apk.name, onLog)
+        } else {
+            onLog("没有 APK 产物，跳过 APK。")
+        }
+        // 5) 上传 AAB（有就传）：Windows 上架的包，也放进同一个 Release，免得再手工搬
+        val aab = File(projectDir, "app/build/outputs/bundle/app-release.aab")
+        if (aab.exists()) uploadAsset(repo, releaseId, token, aab, aab.name, onLog) else onLog("没有 AAB 产物（先点「构建 AAB」）。")
+        zip.delete()
+        return Result(true, "已发布到 $repo · tag $tag", htmlUrl)
+    }
+
+    /** 打源码 zip：跳过 build/ 与 .gradle/，其它文件全收。 */
+    private fun zipProject(root: File, out: File) {
+        ZipOutputStream(out.outputStream().buffered()).use { zos ->
+            root.walkTopDown().forEach { f ->
+                val rel = f.relativeTo(root).path.replace('\\', '/')
+                if (rel.contains("build/") || rel.startsWith(".gradle") || rel.contains("/.git/")) return@forEach
+                if (!f.isFile) return@forEach
+                if (f.length() > 32L * 1024 * 1024) return@forEach
+                zos.putNextEntry(ZipEntry(rel))
+                f.inputStream().use { it.copyTo(zos) }
+                zos.closeEntry()
+            }
+        }
+    }
+
+    private fun uploadAsset(repo: String, releaseId: Long, token: String, file: File, assetName: String, onLog: (String) -> Unit) {
+        val url = "https://uploads.github.com/repos/$repo/releases/$releaseId/assets?name=" +
+            java.net.URLEncoder.encode(assetName, "UTF-8")
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"; doOutput = true
+            connectTimeout = 20000; readTimeout = 120000
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Content-Type", "application/octet-stream")
+            setRequestProperty("Accept", "application/vnd.github+json")
+        }
+        try {
+            conn.outputStream.use { os -> file.inputStream().use { it.copyTo(os, 64 * 1024) } }
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            onLog("上传 " + assetName + " → HTTP " + code + (if (code in 200..299) "（成功，${file.length()} B）" else "：" + text.take(300)))
+        } catch (e: Exception) {
+            onLog("上传 " + assetName + " 失败：" + e.message)
+        } finally { conn.disconnect() }
+    }
+
+    private fun request(method: String, url: String, token: String, body: ByteArray?, type: String, onLog: (String) -> Unit): org.json.JSONObject? =
+        try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = method; doOutput = body != null
+                connectTimeout = 20000; readTimeout = 60000
+                setRequestProperty("Authorization", "Bearer $token")
+                setRequestProperty("Accept", "application/vnd.github+json")
+                if (body != null) setRequestProperty("Content-Type", type)
+            }
+            body?.let { b -> conn.outputStream.use { it.write(b) } }
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) onLog("HTTP $code：" + text.take(400))
+            conn.disconnect()
+            if (code in 200..299 && text.isNotBlank()) org.json.JSONObject(text) else null
+        } catch (e: Exception) {
+            onLog("请求失败：" + e.message)
+            null
+        }
+
+    private fun json(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\""
+}

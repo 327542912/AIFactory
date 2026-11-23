@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_desc">AIFactory 自动化验证：读取前台应用的界面文字、执行点按与滑动，用来判断刚构建的应用是真能跑、还是崩了/白屏。</string>
+</resources>

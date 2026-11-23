@@ -1,0 +1,422 @@
+name: Build AIFactory ARM64 Runtime
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      extra_packages:
+        description: "额外打进 bootstrap 的包（逗号分隔；留空 = 只构建基础 bootstrap）"
+        required: false
+        default: "openjdk-21,gradle,apksigner,git,zip,unzip"
+      repo_packages:
+        description: "额外构建并发布到 apt 软件源的包（逗号分隔，供 pkg install 使用；留空 = 跳过）"
+        required: false
+        default: "python,nodejs,curl,wget,jq,ripgrep,nano,make"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout AIFactory
+        uses: actions/checkout@v4
+
+      - name: Checkout Termux build system
+        uses: actions/checkout@v4
+        with:
+          repository: agnostic-apollo/termux-packages
+          ref: infra-improvs
+          path: termux-packages
+
+      - name: Configure AIFactory package identity
+        run: |
+          cd termux-packages
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          p = Path("scripts/properties.sh")
+          s = p.read_text()
+          keys = ("TERMUX_APP__PACKAGE_NAME", "TERMUX_APP_PACKAGE")
+          changed = 0
+
+          for key in keys:
+              pattern = rf'(?m)^(\s*{key}\s*=\s*).*$'
+              s, n = re.subn(
+                  pattern,
+                  lambda m: m.group(1) + '"com.aifactory.app"',
+                  s
+              )
+              changed += n
+
+          if not changed:
+              raise SystemExit("ERROR: package identity variable not found")
+
+          p.write_text(s)
+          print("AIFactory package identity configured.")
+          PY
+
+          grep -nE 'TERMUX_APP(_|__)?PACKAGE' scripts/properties.sh
+
+      - name: Omit optional foot terminfo source
+        working-directory: termux-packages
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          p = Path("packages/ncurses/build.sh")
+          s = p.read_text()
+
+          for var in ("VERSION", "SRCURL", "SHA256"):
+              pattern = re.compile(
+                  rf'(?m)^[ \t]*"\$\(\. "\$TERMUX_SCRIPTDIR/'
+                  rf'x11-packages/foot/build\.sh"; '
+                  rf'echo "\$TERMUX_PKG_{var}"\)"\)\s*$'
+              )
+              s, n = pattern.subn(")", s)
+              if n != 1:
+                  raise SystemExit(f"{var}: expected 1 foot entry, found {n}")
+
+          lines = s.splitlines()
+          foot_cp = [
+              line for line in lines
+              if "full-terminfo/f/foot" in line and "cp " in line
+          ]
+          if len(foot_cp) != 1:
+              raise SystemExit(
+                  "foot terminfo cp line count mismatch: "
+                  + repr(foot_cp)
+              )
+          s = "\n".join(
+              line for line in lines if line != foot_cp[0]
+          ) + "\n"
+
+          lines = s.splitlines()
+          foot_sed = [
+              line for line in lines
+              if "foot/foot.info" in line and "sed " in line
+          ]
+          foot_tic = [
+              line for line in lines
+              if "tic -x -e foot,foot-direct" in line
+          ]
+
+          if len(foot_sed) != 1 or len(foot_tic) != 1:
+              raise SystemExit(
+                  f"foot sed/tic mismatch: {foot_sed!r}, {foot_tic!r}"
+              )
+
+          s = "\n".join(
+              line for line in lines
+              if line not in (foot_sed[0], foot_tic[0])
+          ) + "\n"
+
+          if "x11-packages/foot/build.sh" in s or "foot/foot.info" in s:
+              raise SystemExit("Foot source reference remains")
+
+          p.write_text(s)
+          print("Foot optional source removed; SHA-256 checks preserved.")
+          PY
+
+          git diff --check
+          git diff -- packages/ncurses/build.sh
+
+      - name: Patch unbound swig interface
+        working-directory: termux-packages
+        run: |
+          set -euo pipefail
+
+          P=packages/libunbound
+          B=$P/build.sh
+          grep -q -- '--with-pyunbound' "$B"
+          test ! -e "$P/unbound-swig-token.patch"
+
+          base64 -d > "$P/unbound-swig-token.patch" <<'B64'
+          LS0tIGEvbGlidW5ib3VuZC9weXRob24vbGlidW5ib3VuZC5pCTIwMjYtMTEtMjEgMjE6MTM6MjAuOTg4NjI1ODY5ICswODAwCisrKyBiL2xpYnVuYm91bmQvcHl0aG9uL2xpYnVuYm91bmQuaQkyMDI2LTExLTIxIDIxOjEzOjIxLjAzNTYyNjEzMyArMDgwMApAQCAtODQ5LDE1ICs4NDksMTMgQEAKICAgICAgICAgICAgICAKIH0KIAotJWV4Y2VwdGlvbiB1Yl9yZXNvbHZlCi0leyAKKyVleGNlcHRpb24gdWJfcmVzb2x2ZSB7CiAgIC8vcHJpbnRmKCJyZXNvbHZlX3N0YXJ0KCVsWClcbiIsKGxvbmcgdW5zaWduZWQgaW50KWFyZzEpOwogICBQeV9CRUdJTl9BTExPV19USFJFQURTIAotICAkZnVuY3Rpb24gCisgICRhY3Rpb24gCiAgIFB5X0VORF9BTExPV19USFJFQURTIAogICAvL3ByaW50ZigicmVzb2x2ZV9zdG9wKClcbiIpOwotJX0gCi0KK30KICVpbmNsdWRlICJsaWJ1bmJvdW5kL3VuYm91bmQuaCIKIAogJWlubGluZSAlewo=
+          B64
+
+          VER=$(sed -n 's/^TERMUX_PKG_VERSION="\(.*\)"/\1/p' "$B" | head -1)
+          echo "libunbound version: $VER"
+          [ -n "$VER" ]
+
+          W=$(mktemp -d)
+          mkdir -p "$W/libunbound/python"
+          curl -fsSL --retry 3 --max-time 90 \
+            "https://raw.githubusercontent.com/NLnetLabs/unbound/release-$VER/libunbound/python/libunbound.i" \
+            -o "$W/libunbound/python/libunbound.i"
+          grep -q '\$function' "$W/libunbound/python/libunbound.i"
+
+          patch -p1 -d "$W" < "$P/unbound-swig-token.patch"
+          grep -q '^  \$action' "$W/libunbound/python/libunbound.i"
+          ! grep -q '\$function' "$W/libunbound/python/libunbound.i"
+          echo "preflight OK"
+
+          echo "--- patch content ---"
+          cat "$P/unbound-swig-token.patch"
+      - name: Fix docbook-xml download source
+        working-directory: termux-packages
+        run: |
+          set -euo pipefail
+          F=packages/docbook-xml/build.sh
+
+          sed -i 's#https://docbook.org/xml/#https://www.oasis-open.org/docbook/xml/#g' "$F"
+
+          N=$(grep -c '^\s*termux_download "https://www\.oasis-open\.org/docbook/xml/' "$F")
+          [ "$N" -eq 5 ] || { echo "ERROR: expected 5 termux_download urls, got $N" >&2; exit 1; }
+          ! grep -q 'termux_download "https://docbook\.org/xml/' "$F" || { echo "ERROR: docbook.org remains" >&2; exit 1; }
+          echo "docbook-xml: rewrote $N source urls"
+
+          for v in 4.1.2 4.2 4.3 4.4 4.5; do
+            if [ "$v" = "4.1.2" ]; then f=docbkx412.zip; else f=docbook-xml-$v.zip; fi
+            code=$(curl -sIL --retry 3 --max-time 25 -o /dev/null -w '%{http_code}' \
+              "https://www.oasis-open.org/docbook/xml/$v/$f")
+            echo "  $v -> $code"
+            [ "$code" = "200" ] || { echo "ERROR: $v unreachable ($code)" >&2; exit 1; }
+          done
+          echo "docbook-xml preflight OK"
+
+      - name: Drop command-not-found from bootstrap list
+        run: |
+          set -euo pipefail
+          cd termux-packages
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("scripts/build-bootstraps.sh")
+          src = p.read_text()
+          target = 'PACKAGES_LIST+=("command-not-found")'
+          note = ':  # AIFactory: generate-db.js 按官方 com.termux 的 Contents 索引反查包名，改包名后必然失配'
+          if target in src:
+              src = src.replace(target, note)
+              p.write_text(src)
+          assert target not in p.read_text(), "patch failed"
+          print("patched: command-not-found dropped from bootstrap package list")
+          PY
+          grep -n 'command-not-found' scripts/build-bootstraps.sh || echo "no remaining reference"
+
+      - name: Fix dead source mirrors (dos2unix, nano)
+        run: |
+          set -euo pipefail
+          cd termux-packages
+          # dos2unix: waterlan.home.xs4all.nl 返回 12KB 错误页，tarball SHA256 与配方不符
+          # 换到 distfiles.macports.org，已逐字节核对 991485 字节 / 26474244...4bf3a 一致
+          sed -i 's|https://waterlan.home.xs4all.nl/dos2unix/|https://distfiles.macports.org/dos2unix/|' packages/dos2unix/build.sh
+          # nano: nano-editor.org 全站 503；ftp.gnu.org 的 nano-8.5.tar.xz 1707128 字节哈希一致
+          sed -i 's|https://nano-editor.org/dist/latest/|https://ftp.gnu.org/gnu/nano/|' packages/nano/build.sh
+          grep -n 'TERMUX_PKG_SRCURL=' packages/dos2unix/build.sh packages/nano/build.sh
+
+      - name: Preflight verify source hashes
+        env:
+          EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages || 'openjdk-21,gradle,apksigner,git,zip,unzip' }}
+          REPO_PACKAGES: ${{ github.event.inputs.repo_packages || '' }}
+        run: |
+          set -uo pipefail
+          cd termux-packages
+          # 传 "none" 表示不打包（空字符串在 GitHub 表达式里会回落到默认值）
+          if [ "${EXTRA_PACKAGES:-}" = "none" ]; then EXTRA_PACKAGES=""; fi
+          if [ "${REPO_PACKAGES:-}" = "none" ]; then REPO_PACKAGES=""; fi
+          printf '%-16s %-11s %s\n' PACKAGE RESULT URL
+          fail=0
+          PKGS="bash bzip2 coreutils curl dash diffutils findutils gawk grep gzip less procps psmisc sed tar \
+                termux-core termux-exec termux-keyring termux-tools util-linux xz-utils apt gpgv \
+                ed debianutils dos2unix inetutils lsof nano net-tools patch unzip"
+          for e in ${EXTRA_PACKAGES:-} ${REPO_PACKAGES:-}; do if [ -n "$e" ]; then PKGS="$PKGS $(echo "$e" | tr ',' ' ')"; fi; done
+          for p in $PKGS; do
+            d="packages/$p"
+            if [ ! -f "$d/build.sh" ]; then
+              sub=$(find packages -maxdepth 2 -name "$p.subpackage.sh" 2>/dev/null | head -1 || true)
+              if [ -n "$sub" ]; then d=$(dirname "$sub"); else printf '%-16s %-11s\n' "$p" "no-recipe"; continue; fi
+            fi
+            b="$d/build.sh"
+            sha=$(grep -m1 'TERMUX_PKG_SHA256' "$b" 2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1 || true)
+            vars=$(mktemp)
+            grep -E '^[A-Za-z_][A-Za-z0-9_]*=(("[^"]*")|('"'"'[^'"'"']*'"'"')|[^"'"'"' ]*)$' "$b" > "$vars" 2>/dev/null || true
+            url=$( set +eu; . "$vars" >/dev/null 2>&1; eval "echo ${TERMUX_PKG_SRCURL:-}" 2>/dev/null || true )
+            rm -f "$vars"
+            if [ -z "$url" ] || [ "$url" = "" ]; then printf '%-16s %-11s\n' "$p" "no-SRCURL"; continue; fi
+            case "$url" in *'$'*) printf '%-16s %-11s %s\n' "$p" "unexpanded" "$url"; continue;; esac
+            code=$(curl -fL --retry 3 --retry-delay 2 --retry-all-errors --max-time 150 -s -o /tmp/_pf "$url" -w '%{http_code}' 2>/dev/null || echo ERR)
+            case "$code" in
+              200) ;;
+              404|410) printf '%-16s %-11s %s\n' "$p" "DEAD($code)" "$url"; fail=1; continue ;;
+              *) printf '%-16s %-11s %s\n' "$p" "WARN($code)" "$url"; continue ;;
+            esac
+            got=$(sha256sum /tmp/_pf | cut -d' ' -f1)
+            if [ -z "$sha" ]; then printf '%-16s %-11s %s\n' "$p" "OK(no-sha)" "$url"
+            elif [ "$got" = "$sha" ]; then printf '%-16s %-11s %s\n' "$p" "OK" "$url"
+            else printf '%-16s %-11s %s\n' "$p" "HASH-DIFF" "$url"; fail=1; fi
+          done
+          if [ "$fail" -ne 0 ]; then echo "::error::source preflight failed"; exit 1; fi
+          echo "preflight OK"
+          exit $fail
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Build matching Android NDK Docker image
+        working-directory: termux-packages
+        run: |
+          docker build -t ghcr.io/termux/package-builder ./scripts
+
+      - name: Build ARM64 bootstrap
+        env:
+          EXTRA_PACKAGES: ${{ github.event.inputs.extra_packages || 'openjdk-21,gradle,apksigner,git,zip,unzip' }}
+        run: |
+          cd termux-packages
+          if [ "${EXTRA_PACKAGES:-}" = "none" ]; then EXTRA_PACKAGES=""; fi
+          # 注意：不能加 --android10。该模式生成的是「APK 打包系统」bootstrap：
+          # 没有 apt/dpkg、改用 proot，只适用于 targetSdk>=29。
+          # AIFactory 使用 targetSdk 28 直接 execve，需要标准 bootstrap。
+          ARGS=(--architectures aarch64)
+          if [ -n "$EXTRA_PACKAGES" ]; then ARGS+=(--packages-post-additional "$EXTRA_PACKAGES"); fi
+          # 上游 run-docker.sh / build-bootstraps.sh 的 EXIT trap 会把「已经成功打印
+          # Finished successfully」的构建翻成退出码 1（已核对上游 run-docker.sh 的
+          # docker__run_docker_exec_trap 与 build_bootstrap_trap）。所以这里不看退出码，
+          # 只以「zip 是否真的落盘」为准，避免产物随退出码一起被扔掉。
+          set +e
+          ./scripts/run-docker.sh ./scripts/build-bootstraps.sh "${ARGS[@]}"
+          RC=$?
+          set -e
+          echo "build-bootstraps.sh rc=$RC"
+          # 注意：TERMUX_BOOTSTRAP_OUTPUT_DIRECTORY 指向仓库根（不是 output/），
+          # 所以 zip 落在 termux-packages/bootstrap-aarch64.zip。别写死路径。
+          ZIP=$(find . -maxdepth 3 -name 'bootstrap-aarch64.zip' -type f | head -1)
+          if [ -z "$ZIP" ]; then
+            echo "::error::bootstrap-aarch64.zip 不存在，构建真失败 (rc=$RC)"
+            ls -la | head -20
+            ls -la output 2>/dev/null | head -20 || true
+            exit 1
+          fi
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning::rc=$RC（上游 trap 假失败），但 $ZIP 已生成，按成功处理"
+          fi
+          ls -lh "$ZIP"
+          unzip -t "$ZIP" | tail -2
+
+      - name: Normalize bootstrap prefix leftovers
+        env:
+          RUNTIME_REPO_URL: https://github.com/${{ github.repository }}/releases/download/runtime-repo/
+        run: |
+          if [ -f .github/scripts/normalize-bootstrap-prefix.sh ]; then
+            ZIP=$(find termux-packages -maxdepth 2 -name 'bootstrap-aarch64.zip' -type f | head -1)
+            if [ -z "$ZIP" ]; then echo "::error::no zip to normalize"; exit 1; fi
+            bash .github/scripts/normalize-bootstrap-prefix.sh "$ZIP"
+          else
+            echo "::warning::normalizer missing, skip"
+          fi
+
+      - name: Locate bootstrap
+        working-directory: .
+        run: |
+          set -x
+          cd termux-packages
+          Z=$(find . -maxdepth 3 -name 'bootstrap-aarch64.zip' | head -1)
+          if [ -z "$Z" ]; then
+            echo "bootstrap-aarch64.zip not found"
+            ls -la
+            ls -la output 2>/dev/null | head -50
+            exit 1
+          fi
+          [ "$Z" = "./bootstrap-aarch64.zip" ] || cp "$Z" ./bootstrap-aarch64.zip
+          ls -lh bootstrap-aarch64.zip
+          sha256sum bootstrap-aarch64.zip
+
+      - name: Verify bootstrap
+        run: |
+          set -e
+          ZIP=termux-packages/bootstrap-aarch64.zip
+          test -s "$ZIP"
+          ls -lh "$ZIP"
+          sha256sum "$ZIP"
+          echo "entries: $(unzip -l "$ZIP" | tail -1)"
+          unzip -t "$ZIP" | tail -2
+          # 前缀核验：bash 是整棵树里最该带新前缀的二进制之一
+          rm -rf pfxprobe && mkdir -p pfxprobe
+          unzip -q "$ZIP" 'bin/bash' -d pfxprobe || unzip -q "$ZIP" -d pfxprobe
+          if [ -f pfxprobe/bin/bash ]; then
+            A=$(strings pfxprobe/bin/bash | grep -c 'data/data/com.aifactory.app/files/usr' || true)
+            T=$(strings pfxprobe/bin/bash | grep -c 'data/data/com.termux/files/usr' || true)
+            echo "bash: aifactory-prefix=$A termux-prefix=$T"
+            if [ "$A" -eq 0 ]; then echo "::error::bash 里没有 com.aifactory.app 前缀，重编前缀没生效"; exit 1; fi
+            if [ "$T" -ne 0 ]; then echo "::warning::bash 里仍残留 com.termux 前缀 $T 处"; fi
+          else
+            echo "::warning::没解出 bin/bash，跳过前缀核验"
+          fi
+          rm -rf pfxprobe
+
+      - name: Upload runtime artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aifactory-runtime-aarch64
+          path: termux-packages/bootstrap-aarch64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish release (stable download URL)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=runtime-latest
+          test -s termux-packages/bootstrap-aarch64.zip || { echo "no bootstrap zip, skip release"; exit 0; }
+          sha256sum termux-packages/bootstrap-aarch64.zip | cut -d' ' -f1 > bootstrap-aarch64.zip.sha256
+          gh release delete "$TAG" --cleanup-tag -y --repo "$GITHUB_REPOSITORY" || true
+          gh release create "$TAG" \
+            termux-packages/bootstrap-aarch64.zip bootstrap-aarch64.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AIFactory runtime (aarch64)" \
+            --notes "SHA-256: $(cat bootstrap-aarch64.zip.sha256)"
+          echo "URL: https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/bootstrap-aarch64.zip"
+
+      - name: Build extra packages for the apt repo
+        env:
+          REPO_PACKAGES: ${{ github.event.inputs.repo_packages || 'python,nodejs,curl,wget,jq,ripgrep,nano,make' }}
+        run: |
+          if [ "${REPO_PACKAGES:-}" = "none" ]; then REPO_PACKAGES=""; fi
+          if [ -z "${REPO_PACKAGES:-}" ]; then echo "repo_packages=none, skip apt repo build"; exit 0; fi
+          cd termux-packages
+          ./scripts/run-docker.sh ./build-package.sh -a aarch64 $(echo "$REPO_PACKAGES" | tr ',' ' ')
+
+      - name: Publish apt repo (pkg install source)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -ex
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils
+          TAG=runtime-repo
+          mkdir -p repo newdebs
+          # GitHub 会把文件名里 [A-Za-z0-9._-] 以外的字符替换成 '.'，先自己改好，保证索引里的文件名与资产名一致
+          for f in termux-packages/output/*.deb; do
+            [ -e "$f" ] || continue
+            n=$(basename "$f" | sed 's/[^A-Za-z0-9._-]/./g')
+            cp "$f" "newdebs/$n"
+          done
+          ls newdebs | head -200 || true
+          # 保留以前发布过的包，保证索引完整
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir repo || true
+          cp newdebs/* repo/ 2>/dev/null || true
+          cd repo
+          dpkg-scanpackages -m . > Packages
+          gzip -k -f Packages
+          apt-ftparchive release . > Release
+          cd ..
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "AIFactory apt repo (aarch64)" \
+              --notes "deb [trusted=yes] https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ ./"
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            newdebs/* repo/Packages repo/Packages.gz repo/Release
+          echo "APT: deb [trusted=yes] https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/ ./"
+

@@ -1,0 +1,249 @@
+package com.aifactory.app
+
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * 全局串行调度器 —— 全流程的唯一执行入口。
+ *
+ * 之前是四个互不相干的执行体：ChatRunner / PluginRunner / SetupRunner / 项目页里的
+ * rememberCoroutineScope() 局部 job。它们靠「互斥」互相躲（一个在跑就提示另一个等等），
+ * 而不是靠「编排」协调：没有队列、没有阶段、没有统一日志、没有产物登记，
+ * 而且项目构建挂在页面作用域上——切到终端就取消，构建白跑。
+ *
+ * 这里只做一件事：所有长任务（apt 装包、gradle 构建、签名、产物登记）排进同一条队列，
+ * 同一时刻只有一个在跑，阶段和日志落盘到 home/.aifactory/jobs.json。
+ * 这样「对话里说一句 → 改代码 → 构建 → 签名 → 产物 → 安装」就是一条可复现的流水线，
+ * 而不是四次互不知道对方在干什么的独立操作。
+ */
+internal object Pipeline {
+
+    private val main = Handler(Looper.getMainLooper())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val lock = Mutex()
+
+    private class Task(
+        val title: String,
+        val stages: List<String>,
+        val body: suspend (report: (String) -> Unit) -> String
+    )
+
+    private val queue: ArrayDeque<Task> = ArrayDeque()
+
+    var current by mutableStateOf(""); private set
+    var stage by mutableStateOf(""); private set
+    var stagesDone by mutableStateOf(emptyList<String>()); private set
+    var stageTimes by mutableStateOf(emptyList<String>()); private set
+    var lastMs by mutableStateOf(0L); private set
+    var log by mutableStateOf(""); private set
+    var queued by mutableStateOf(0); private set
+    var busy by mutableStateOf(false); private set
+    var lastApk by mutableStateOf<File?>(null); private set
+    /** 最近一次构建产物自检解析出的包名，安装后用它确认是否真的装上了。 */
+    var lastPkg by mutableStateOf<String?>(null)
+    /** 上架模式产物（AAB）。与 APK 分开存，避免「最近产物」卡把 aab 当 apk 装。 */
+    var lastAab by mutableStateOf<File?>(null); private set
+    var lastAabNote by mutableStateOf(""); private set
+    /** 最近一次真机验证结论：PASS / CRASH / BLANK / NOT_INSTALLED / NO_LAUNCHER / NO_APK / LAUNCHED_UNVERIFIED */
+    var lastVerdict by mutableStateOf<String?>(null); private set
+
+    /** 最近一次任务的完整日志文件（已落盘，可直接复制/导出）。 */
+    var lastLog by mutableStateOf<File?>(null); private set
+
+    fun submit(
+        ctx: Context,
+        title: String,
+        stages: List<String>,
+        body: suspend (report: (String) -> Unit) -> String
+    ) {
+        synchronized(queue) { queue.addLast(Task(title, stages, body)) }
+        main.post { queued = queue.size }
+        scope.launch {
+            lock.lock()
+            try {
+                while (true) {
+                    val t = synchronized(queue) { queue.removeFirstOrNull() } ?: break
+                    main.post { queued = queue.size }
+                    run(ctx, t)
+                }
+            } finally {
+                lock.unlock()
+                main.post { busy = false; current = ""; stage = "" }
+            }
+        }
+    }
+
+    /** 工具调用（AgentEngine 的 build_apk 等）也要走这把锁，否则会和排队中的任务抢同一个 workspace。 */
+    suspend fun <T> exclusive(block: suspend () -> T): T = lock.withLock { block() }
+
+    /** 短消息（导出结果、安装结果）也进同一条日志，切页不丢。 */
+    fun appendNote(s: String) {
+        main.post { log = (log + "\n" + s).takeLast(20000) }
+    }
+
+    fun clearQueue() {
+        synchronized(queue) { queue.clear() }
+        main.post { queued = 0 }
+    }
+
+    /** 项目构建的标准流水线：工具链 → gradle → 产物落 outputs。 */
+    fun verifyProject(ctx: Context, rt: RuntimeEngine, dir: File) {
+        submit(ctx, "验证运行 " + dir.name, listOf("安装", "启动", "取证(logcat/截图)", "写 verify.json")) { report ->
+            val v = VerifyRunner.verify(ctx, rt, dir) { line -> report(line) }
+            main.post { lastVerdict = v.verdict }
+            "【" + v.verdict + "】" + v.detail + (if (v.json != null) "\n证据：" + v.json.path else "")
+        }
+    }
+
+    fun buildAab(ctx: Context, rt: RuntimeEngine, dir: File) {
+        submit(
+            ctx,
+            "AAB 构建 " + dir.name,
+            listOf("准备工具链", "proto link", "dex", "打包 AAB", "签名")
+        ) { report ->
+            val ab = AabBuilder(ctx, rt).build(dir) { line -> report(line) }
+            if (ab.ok) {
+                main.post { lastAab = ab.aab; lastAabNote = ab.message }
+                ab.message
+            } else {
+                main.post { lastAabNote = ab.message }
+                ab.message
+            }
+        }
+    }
+
+    fun buildProject(ctx: Context, pk: Packager, dir: File, release: Boolean, install: Boolean = false) {
+        submit(
+            ctx,
+            (if (release) "Release 构建 " else "Debug 构建 ") + dir.name,
+            listOf("准备工具链", "编译与打包", "签名", "收集产物")
+        ) { report ->
+            KeepAliveService.start(ctx)
+            try {
+                val res = pk.build(dir, release) { chunk -> report(chunk) }
+                if (res.ok) {
+                    // 产物统一收进 files/outputs：项目页/文件中心/导出都从这里取，不再藏在 app/build 里
+                    val apkSrc = res.apk
+                    val outDir = RuntimePaths.outputs(ctx).apply { mkdirs() }
+                    val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+                    val dest = if (apkSrc != null) File(outDir, dir.name + "-" + (if (release) "release-" else "debug-") + stamp + ".apk") else null
+                    runCatching { if (apkSrc != null && dest != null) apkSrc.copyTo(dest, overwrite = true) }
+                    val finalApk = if (dest != null && dest.exists()) dest else apkSrc
+                    main.post { lastApk = finalApk; lastPkg = res.pkg }
+                    report("产物已存档：" + (finalApk?.path ?: "无"))
+                    val msg = "构建成功：" + (finalApk?.name ?: "?") + "（" + ((finalApk?.length() ?: 0L) / 1024) + " KB）\n绝对路径：" + (finalApk?.path ?: "无")
+                    if (install && finalApk != null) {
+                        msg + "\n" + Installer.install(ctx, finalApk, res.pkg) { line -> appendNote(line) }
+                    } else msg
+                } else {
+                    res.message + "\n--- 日志末尾 ---\n" + tailText(res.log, 4000)
+                }
+            } finally {
+                KeepAliveService.stop(ctx)
+            }
+        }
+    }
+
+    private suspend fun run(ctx: Context, t: Task) {
+        val started = System.currentTimeMillis()
+        main.post { busy = true; current = t.title; log = ""; stage = t.stages.firstOrNull() ?: ""; stagesDone = emptyList(); stageTimes = emptyList(); lastMs = 0L }
+
+        val report: (String) -> Unit = { s -> main.post { log = (log + s).takeLast(20000) } }
+        var markAt = started
+        val advance: (String) -> Unit = { name ->
+            main.post {
+                if (!stagesDone.contains(name)) {
+                    stagesDone = stagesDone + name
+                    val sec = ((System.currentTimeMillis() - markAt) / 100) / 10.0
+                    stageTimes = stageTimes + (name + " " + sec + "s")
+                    markAt = System.currentTimeMillis()
+                }
+            }
+        }
+
+        val result = try {
+            t.body { s ->
+                t.stages.firstOrNull { name -> s.contains(name) }?.let { hit -> advance(hit) }
+                report(s)
+            }
+        } catch (e: Throwable) {
+            "失败：" + (e.message ?: e.javaClass.simpleName)
+        }
+
+        // 失败判定要覆盖各模块自己的措辞：早期只认 "失败" 前缀，于是 "构建失败（退出码 1）"
+        // 被当成成功打了 ✅，用户看到"✅ 构建失败"这种自相矛盾的东西。
+        val firstLine = result.lineSequence().firstOrNull() ?: ""
+        val ok = !(firstLine.contains("失败") || firstLine.contains("未通过") || firstLine.contains("❌") || firstLine.contains("已取消"))
+        val full = log + "\n" + (if (ok) "✅ " else "❌ ") + result
+        val totalMs = System.currentTimeMillis() - started
+        main.post { lastMs = totalMs }
+        record(ctx, t.title, ok, totalMs, result)
+        // 完整日志落盘：按时间命名，保留最近 200 个，切页/重启都不丢
+        val saved = runCatching {
+            val dir = File(RuntimePaths.home(ctx), ".aifactory/logs").apply { mkdirs() }
+            val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+            val name = stamp + "-" + t.title.map { if (it.isLetterOrDigit()) it else '_' }.joinToString("") + ".log"
+            val f = File(dir, name)
+            f.writeText("title: " + t.title + "\nok: " + ok + "\nms: " + (System.currentTimeMillis() - started) +
+                "\n\n" + full)
+            dir.listFiles()?.sortedByDescending { it.name }?.drop(200)?.forEach { it.delete() }
+            f
+        }.getOrNull()
+        main.post { log = full; lastLog = saved }
+    }
+
+    /** 给 Agent 用的现场快照：当前在跑什么、上个任务成功与否、最近日志、最近产物。 */
+    fun snapshot(ctx: Context): String = buildString {
+        appendLine("已完成阶段：" + stagesDone.joinToString(" → ") + (if (stageTimes.isNotEmpty()) "  【耗时：" + stageTimes.joinToString(" / ") + "】" else ""))
+        appendLine("上个任务总耗时：" + (lastMs / 1000.0) + "s")
+        appendLine("排队中：" + queued + "  运行中：" + (if (busy) (current.ifBlank { "是" }) else "否") +
+            (if (stage.isNotBlank()) " / 阶段：" + stage else ""))
+        appendLine("最近产物：" + (lastApk?.path ?: "无") + (lastPkg?.let { "  包名：" + it } ?: ""))
+        lastAab?.let { appendLine("最近 AAB：" + it.path) }
+        val lg = lastLog
+        appendLine("最近日志文件：" + (lg?.path ?: "无"))
+        if (lg != null && lg.exists()) {
+            appendLine("--- 日志开头 ---")
+            appendLine(lg.readText().take(1200))
+            appendLine("--- 日志末尾 ---")
+            appendLine(lg.readText().takeLast(1200))
+        }
+        runCatching {
+            val f = File(RuntimePaths.home(ctx), ".aifactory/jobs.json")
+            if (f.exists()) {
+                appendLine("--- 最近任务（jobs.json 末尾 6 条）---")
+                appendLine(f.readLines().takeLast(6).joinToString("\n"))
+            }
+        }
+    }
+
+    private fun record(ctx: Context, title: String, ok: Boolean, ms: Long, summary: String) {
+        runCatching {
+            val f = File(RuntimePaths.home(ctx), ".aifactory/jobs.json")
+            f.parentFile?.mkdirs()
+            val line = JSONObject()
+                .put("t", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
+                .put("title", title)
+                .put("ok", ok)
+                .put("ms", ms)
+                .put("summary", summary.take(300))
+                .toString()
+            f.appendText(line + "\n")
+        }
+    }
+}

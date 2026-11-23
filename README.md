@@ -1,361 +1,169 @@
 # AIFactory
 
-**Android 上的自建 AI 开发工作台。不依赖 Termux，不用 proot，不复制 rootfs —— 整套 Linux 运行环境是从源码编译出来的，只把前缀里的包名换成了自己的。**
+> **📦 只想拿文件？** → **[下载总入口 / All downloads](https://github.com/327542912/AIFactory/releases/tag/downloads)** —— APK、Runtime bootstrap、Android SDK、Gradle 8.7 的直链、体积、sha256 全在这一页。
 
-[![Runtime CI](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml/badge.svg?branch=master)](https://github.com/327542912/AIFactory/actions/workflows/build-aifactory-runtime.yml)
-[![APK CI](https://github.com/327542912/AIFactory/actions/workflows/android-build.yml/badge.svg?branch=app-0.2.2)](https://github.com/327542912/AIFactory/actions/workflows/android-build.yml)
-![arch](https://img.shields.io/badge/arch-arm64--v8a-blue)
-![android](https://img.shields.io/badge/Android-8.0%2B-green)
-![runtime](https://img.shields.io/badge/runtime-Termux%20fork%20(no%20proot)-orange)
+在一台 Android 手机上，把一个软件从「一句话需求」做到「可安装的 APK」。
 
-<p align="center">
-  <img src="docs/images/settings.png" width="360" alt="AIFactory 设置页">
-</div>
+不是云端构建服务，也不是在线 IDE：编译、签名、安装、验证、发布全部在这台手机的私有目录里跑，断网也能构建。
+
+> 当前版本：**0.10.23（versionCode 93）**
+> 签名：固定 `release.jks`（CN=AIFactory），可覆盖安装，卸载才会丢 Runtime
+> 适用：Xiaomi 2311DRK48C / Android 14（arm64），自带 Linux Runtime（不依赖 Termux）
 
 ---
 
-## 这是什么
+## 它解决什么问题
 
-一台没 root 的 Android 手机上，要跑 `bash`、`java`、`gradle`、`git`、`apksigner`，最后在手机本地编出 APK —— 这条路通常要靠 Termux，或者靠 proot 套一个 rootfs。AIFactory 走的是第三条路：
+手机上没有可用的 Android 构建链：gradle 在设备上必 fork Daemon 且要联网拉 `dl.google.com`，一次 `assembleDebug` 直接卡死。所以这里不用 gradle，改为**零网络零依赖的本地五步链**：
 
-**以 `termux-packages` 为构建系统，从源码把整套运行环境重编一遍，把二进制里面写死的前缀从 `/data/data/com.termux/files/usr` 换成 `/data/data/com.aifactory.app/files/usr`，作为本 App 的私有数据直接 `execve`。**
-
-| 项 | 值 |
-|---|---|
-| 应用包名 / applicationId | `com.aifactory.app` |
-| 当前版本 | `0.3.4`（versionCode 22） |
-| `targetSdk` | **28**（硬性上限，见下） |
-| `minSdk` / `compileSdk` | 26 / 34 |
-| Runtime 前缀 | `/data/data/com.aifactory.app/files/usr` |
-| 架构 | `aarch64`（arm64-v8a） |
-| 是否需要 root / proot / Termux | 都不需要 |
-
-### 为什么 `targetSdk` 必须是 28
-
-Android 10（API 29）起，应用私有目录下的可执行文件被禁止直接 `execve`。`targetSdk 28` 才能让这个 App 执行自己 `files/usr/bin` 下的 ELF —— 这不是偷懒，是这套方案成立的**前提**。改回 34 会直接让整个 Runtime 无法启动。
-
-### 为什么不用 proot
-
-proot 靠 `ptrace` 拦截每个系统调用做路径重写，代价是：每次文件操作都多一次陷阱、线程数受限于调试器、`fork` 密集的构建（Gradle / CMake）慢一个数量级，而且 `ptrace` 在某些 ROM 的 seccomp 策略下直接被拒。改前缀重编虽然只做一次、要几十分钟，但**运行时是零开销的原生执行**。
-
----
-
-## 快速开始（手机端）
-
-### 1. 安装 App
-
-从 [apk-latest](https://github.com/327542912/AIFactory/releases/tag/apk-latest) 或仓库内 [`apk/AIFactory-latest.apk`](apk/AIFactory-latest.apk) 下载（debug 签名，仅供自用）：
-
-```text
-https://github.com/327542912/AIFactory/releases/download/apk-latest/AIFactory-latest.apk
+```
+aapt2 compile → aapt2 link → javac → D8 → jar uf → zipalign → apksigner
 ```
 
-**覆盖安装，不要卸载。** 卸载会删掉 `/data/data/com.aifactory.app/files`，Runtime 和 SDK 全要重来。
-签名从 0.2.3 起固定为同一张证书（SHA-256 `05fc565e9bc34b4b69806123a993fd12bbd03b42ddde56238090e7820c2fff0b`），
-2.3 → 2.10 全部能原地升级。
+硬前提：`targetSdk = 28`。API 29+ 禁止执行应用私有目录里的 ELF，而 Runtime 的 `bash`、`aapt2`、`java` 全在 `/data/data/<pkg>/files/usr`。代价是这个 App 自己永远上不了 Google Play（Play 要求 targetSdk ≥ 36），这是设计取舍，不是疏漏。
 
-### 2. 安装 Runtime
+## 架构
 
-打开 App → **设置** → 第 1 张卡「安装 Runtime」，地址默认已填好，直接点「下载并安装」（29.6 MB，解压后 3200+ 文件、1100+ 软链）。
-
-- 下载器会手动跟 GitHub 的 302 跳转、带 UA、按 HTTP Range 断点续传（最多 5 次），残包留在缓存里，再点一次接着下。
-- 网络实在拉不动：用浏览器下 zip，然后点「选择本地 zip」导入，效果完全一样。
-- 带宽差可以在第 1 张卡上方的「下载加速前缀」里填 `https://ghproxy.net`，会变成 `https://ghproxy.net/https://github.com/…`；
-  只代理一层 URL，不改文件内容，sha256 仍按原文件校验。
-
-### 3. 接入自建 apt 源
-
-同一个页面第 2 张卡点「写入软件源并更新」。它做两件事：把 `etc/apt/sources.list` 里的 **官方 Termux 源整行注释**（官方包的路径前缀是 `com.termux`，装进来自建 Runtime 会静默坏掉），换成本仓库发布的自建平铺源：
-
-```text
-deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runtime-repo/ ./
-```
-
-新的 bootstrap 里 `sources.list` 已经写好**两条**源（主源 + `runtime-extra`），装完 `pkg update` 直接可用。
-老 bootstrap（本仓库 2026-11-22 之前发布的）只有一条，需要自己补：
-
-```bash
-echo 'deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runtime-extra/ ./' \
-  >> $PREFIX/etc/apt/sources.list
-```
-
-`Ign ... InRelease` 是平铺源 + `[trusted=yes]` 的正常现象，不是错误。
-
-**手工增删 `runtime-repo` 里的 deb 时**，`Packages` / `Packages.gz` / `Release` 必须一起重建：只换索引不换 `Release`，
-apt 会报 `File has unexpected size (40057 != 40531). Mirror sync in progress?` 然后拒收（这个坑本仓库踩过）。
-仓库里 `scripts/regen-repo-index.sh` 就是干这个的。
-
-### 3.5 用终端
-
-设置页装好 Runtime 后，底部「终端」是**真终端**：不是命令输入框，而是走 `forkpty` 的 PTY 会话，`bash -l` 直接跑在你的 `files/usr` 前缀里。
-
-- `isatty()` 为真 → apt 的进度、gradle 的彩色与计时、`vim` / `top` / `nano` / `less` 全部正常
-- 键盘栏：ESC / TAB / CTRL / ALT / 方向键 / HOME / END / 粘贴，CTRL、ALT 点一下锁定
-- 会话常驻：切到别的页再回来不清屏、bash 不被杀（离开只解绑视图）
-- 双指缩放改字号，同时通过 `setPtyWindowSize` 给 PTY 发 `SIGWINCH`，`nano` 和 gradle rich console 的布局会跟着重排
-- 返回键映射为 ESC；长按终端可选中文本复制
-- **只用 `apt-get`，不要用 `pkg`**：`pkg` 是 termux-tools 的壳脚本，会把平铺源的 `InRelease` 判定成 bad 并改写 `sources.list` 成官方 termux 源
-
-### 4. 装工具链
-
-三条路，按带宽选一条。
-
-**A. 源正常（apt 能跑到 1 MB/s 以上）**
-
-```bash
-pkg install -y openjdk-21 git apksigner zip unzip
-```
-
-**B. 带宽很差（`apt update` 只有几 KB/s）**
-
-JDK 是 105.7 MB，按 7 KB/s 要下四个小时，别用 apt。用浏览器/电脑把 deb 下到手机，再让 App 装：
-
-```text
-https://github.com/327542912/AIFactory/releases/download/runtime-repo/openjdk-21_21.0.8-1_aarch64.deb     105.7 MB
-https://github.com/327542912/AIFactory/releases/download/runtime-repo/openjdk-21-x_21.0.8-1_aarch64.deb    12.5 MB
-```
-
-App → 设置 → 第 4 张卡「本地安装包（.deb）」→「选择本地 .deb」，**两个一起多选**。
-它执行的是 `apt install -y ./xxx.deb`，缺的依赖（`ca-certificates-java` 之类，几百 KB）从软件源补。
-
-**C. 用加速前缀**：设置页第 1 张卡上方填 `https://ghproxy.net`，软件源地址也可以改写成
-`https://ghproxy.net/https://github.com/327542912/AIFactory/releases/download/runtime-repo/`，
-apt 的索引和 deb 都会走代理。
-
-**Gradle 别直接 `pkg install gradle`**——主源的 `gradle` 配方是 `1.9.0.0`（2014 年的 Gradle 1.9），
-在 JDK 21 上起不来，更别说驱动 AGP 8.6。Gradle 8.7 单独放在补充源里：
-
-```bash
-echo 'deb [trusted=yes] https://github.com/327542912/AIFactory/releases/download/runtime-extra/ ./' \
-  >> $PREFIX/etc/apt/sources.list
-pkg update
-pkg install -y gradle     # 装的是 8.7-1，落在 opt/gradle-8.7，bin/gradle 是指向它的 wrapper
-gradle --version          # 应输出 Gradle 8.7
-```
-
-补充源与主源物理分开（`runtime-extra` 这个 tag），是因为 `runtime-repo` 每次流水线重跑都会整份重建，
-手工塞进去的包会被覆盖掉。
-
-装完回设置页，`java` / `gradle` / `git` / `apksigner` 四个 ✗ 会变成 ✓（判据是 `files/usr/bin` 下文件是否真实存在，不缓存状态；
-Gradle 的判据额外要求 `opt/gradle-8.7/bin/gradle` 在，避免把 1.9 误判成"已装好"）。
-
-也可以走 插件页 → 「Gradle / Android Build」→ 安装：它会把补充源写好、`pkg update`、再装这五个包。
-
-### 5. 装 Android SDK
-
-设置页第 3 张卡的地址已经预填好，直接点「下载并安装」：
-
-```text
-https://github.com/327542912/AIFactory/releases/download/sdk-latest/android-sdk-aarch64.zip
-```
-
-143,210,636 B，sha256 `70d10e0a7f180a510134f904b43f4a0c9c7b9dcdcbcb927493b5c8a6a966faa3`。
-包里是 `platforms/android-34|35|36`、`build-tools/34.0.0|35.0.0|36.0.0`（aapt2/aapt/aidl/dexdump/split-select/zipalign 全是 aarch64 静态二进制）、
-`platform-tools/adb`（arm64）。
-
-**别去 Google 官方下载 `build-tools`**：官方 zip 里的 `aapt2` 是 x86_64 ELF，在手机上 `exec` 直接 `Cannot execute binary file`。
-这份 zip 已经把可执行文件换成 aarch64 静态版（`lzhiyong/android-sdk-tools`），`lib/d8.jar`、`lib/apksigner.jar` 仍是官方 jar，可以照常 `java -jar`。
-
-
-### 6. 在手机上编 APK
-
-仓库自带闭环脚本（构建 → 验签 → 安装 → 启动 → 扫崩溃日志）：
-
-```bash
-cd ~/projects/<项目>
-bash /path/to/AIFactory/scripts/device-build.sh    # 参数：项目目录、包名
-# 产物：app/build/outputs/apk/debug/*.apk
-```
-
-脚本做的五件事：
-
-1. **前置检查**：`java ≥17`、Gradle `≥8`（不是 8.7 会自动去补充源装）、`SDK/platforms`、`SDK/build-tools/*/aapt2`
-   能在本机执行（架构不对在这里就挂，不会等到 Gradle 里报一堆看不懂的错）。
-2. **构建**：写 `~/.gradle/gradle.properties`（`-Xmx1536m`、`daemon=false`），
-   并以 `-Pandroid.aapt2FromMavenOverride=<SDK 里的 aapt2>` 调用 —— AGP 默认从 Maven 拉 x86_64 的 aapt2，
-   在手机上执行不了，必须指向 SDK 里的 aarch64 版。
-3. **验签**：`apksigner verify --print-certs`。
-4. **安装**：同一台设备没法用 `adb` 装自己（adb 需要另一台机器或无线调试），
-   所以优先走 Shizuku 的 `rish -c "pm install -r -t <apk>"`；没有 Shizuku 就打印手工路径。
-5. **启动 + 崩溃检查**：`am start` → 6 秒后 `pidof` 判断进程存活 → `logcat -d` 抓 `FATAL EXCEPTION`。
-
-完整日志写到 `~/.aifactory/logs/device-build-<时间>.log`，失败时最后一行会告诉你去哪看。
-
-单独手搓（不用脚本）时注意：`build_termux.sh` 的 shebang 是 `#!/data/data/com.termux/files/usr/bin/bash`（历史遗留），
-**在 Runtime 里必须用 `bash build_termux.sh` 调用**，直接 `./build_termux.sh` 会 `bad interpreter`。
-
----
-
-## 构建与复现（GitHub Actions）
-
-两套独立的流水线，都在 `.github/` 下，且**都只保留 `workflow_dispatch`**——早前挂着 `push` 触发器，每改一行代码都会误触发一轮 36 分钟的重编。
-
-### A. Runtime（[`build-aifactory-runtime.yml`](.github/workflows/build-aifactory-runtime.yml)，分支 `master`）
-
-```bash
-gh workflow run build-aifactory-runtime.yml -f skip_bootstrap=false
-```
-
-| 输入 | 默认 | 含义 |
+| 层 | 文件 | 作用 |
 |---|---|---|
-| `skip_bootstrap` | `false` | `true` = 跳过 bootstrap 重编，只编 apt 包（省 36–47 分钟） |
-| `extra_packages` | 空 | 要**塞进 bootstrap zip** 的额外包；填 `none` 表示不打包 |
-| `repo_packages` | 空 | 只发布到 **apt 源**的包，如 `openjdk-21,gradle`；填 `none` 表示不打包 |
+| Runtime | `RuntimeEngine.kt` `ArchiveInstaller.kt` | Termux 布局 prefix（`files/usr`）+ home；安装 bootstrap / SDK；流式执行、超时、取消、杀进程树 |
+| Agent | `AgentEngine.kt` | 模型⇄工具循环；原生 tool calling，不支持时退回 ```tool 文本协议；`runGuarded` 兜异常（进程不退出） |
+| 打包 | `Packager.kt` | 本地五步链构建 → `release.jks` 签名 → `files/outputs` 归档 → FileProvider + 系统安装器 |
+| 通道 | `Pool.kt` `Secrets.kt` | N 个 OpenAI 兼容端点分片 / 粘滞 / 隔离；Key 三层脱敏 |
+| 验证 | `VerifyRunner.kt` `VerifyA11yService.kt` | 验证档位状态机；无障碍读窗口文字与手势（可选） |
+| 发布 | `GitOps.kt` | `git_push`：向上找 `.git`、密钥扫描、Token 只走请求头 |
+| UI | `MainActivity.kt` `ProjectsScreen.kt` `FileHub.kt` | 对话 / 项目 / 文件中心 / 设置（含通道池与模型配置） |
+| 保活 | `KeepAliveService.kt` | 构建或 Agent 运行期间前台服务 + WakeLock |
 
-常用组合：
+## 能力
 
-| 目的 | 参数 |
+| 模块 | 说明 |
 |---|---|
-| 全量重出 bootstrap | `skip_bootstrap=false`，其余留空 |
-| 只补 apt 包（日常） | `skip_bootstrap=true`、`extra_packages=none`、`repo_packages=openjdk-21,gradle` |
+| 对话 / Agent | 单轮最多 200~300 步，自动写文件、跑命令、构建、安装、验证 |
+| 本地构建 | 产物 `<项目>/app/build/outputs/apk/debug/app-debug.apk`，归档 `files/outputs/<项目>-<时间戳>.apk` |
+| 自检 | `apksigner verify`、清单/入口 Activity、targetSdk、dex 字符串校验 |
+| 安装启动 | 系统安装器 + `am start`，`verify.json` 记录验证档位 |
+| 回归闸门 | `scripts/regression-guard.sh`，R-01…R-52 断言，源码少一个关键串就红 |
+| 通道池 | 按成功率与延迟排序，粘住可用端点；硬错误直接隔离 |
+| 发布 | `git_push`，Token 从设置读取，不落 `git config` |
 
-流水线步骤（按执行顺序）：
+## 通道池：为什么不是「主 / 备」两个
 
-1. `Checkout AIFactory` / `Checkout Termux build system` —— 后者是 fork `agnostic-apollo/termux-packages` 的 `infra-improvs` 分支
-2. `Configure AIFactory package identity` —— 把包名/前缀写进构建系统
-3. 五个确定性补丁：`swig` raw-insert 修 unbound、`docbook-xml` 换 oasis 镜像、`dos2unix`/`nano` 换活源、剔除 `command-not-found`、给全局 CMake 传 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`
-4. `Preflight verify source hashes` —— 门禁：下载所有源包并逐字节比对 SHA256，404/410 硬失败、5xx 仅警告
-5. `Build matching Android NDK Docker image`（约 5 分钟）
-6. `Build ARM64 bootstrap`（**冷启动 36–47 分钟**）
-7. `Normalize bootstrap prefix leftovers` —— 把 18 个 shell 脚本正文里残留的 `com.termux` 改掉（二进制跳过），并断言旧前缀 0 处
-8. `Locate / Verify / Upload / Publish release` —— 发布到 `runtime-latest`
-9. `Build extra packages` → `Publish apt repo` —— 发到 `runtime-repo`
+免费模型（GLM 免费额度）按端点的分钟级配额计，主备二元切换只会在两个端点之间来回撞墙。所以改成通道池，并区分两类失败：
 
-**两个反直觉的细节**
+- **软失败**（429 限流 / 5xx / 网络）：冷却 2~8 轮后自动恢复；若它是当前粘住的端点，**不换端点，原地等 1 秒重试**——能用的慢端点比换到坏端点划算。
+- **硬失败**（401 Key 无效 / 402 余额不足 / 403 无权限 / 模型不存在）：**立即隔离**，从候选池整体移除，一次都不再尝试；只有设置页「探测通道」成功后解除。
+- 全部被隔离时，**0 秒内返回原因清单**，一个请求都不发。
 
-- `build-bootstraps.sh` 里 `TERMUX_BOOTSTRAP_OUTPUT_DIRECTORY` 指向**仓库根目录**，不是 `output/`，zip 落在 `termux-packages/bootstrap-aarch64.zip`，所以定位用的是 `find . -maxdepth 3 -name 'bootstrap-aarch64.zip'`。
-- `run-docker.sh` 是 `set -e` 的 `sh`，末尾的 trap 会把"构建成功"的退出码翻成 1 —— 日志明明打印了 `[*] Finished successfully`，步骤却红。workflow 里用 `set +e` 捕获 rc，**只以 zip 是否落盘为判据**，Upload/Publish 一律 `if: always()`。
+写法（一行一个；`名称` 可省，`Key` 可省则复用主通道 Key；以 URL 段为锚点解析）：
 
-**为什么没有缓存**：`run-docker.sh` 只挂载仓库目录，`~/.termux-build` 在容器内，runner 结束即销毁 —— 每轮都是从零冷编，这也是 36 分钟起步的原因。
+```
+硅基|https://api.siliconflow.cn/v1|zhipuai/GLM-Z1-9B-0414|sk-xxx
+qianfan|https://qianfan.baidubce.com/v2|ernie-speed-8k|bce-v3/ALTAK-xxx/yyy
+本地|http://127.0.0.1:8080/v1|local|
+```
 
-### B. APK（[`android-build.yml`](.github/workflows/android-build.yml)，分支 `app-0.2.2`）
+服务商差异（实测）：
 
-JDK 21 (temurin) + `setup-android` + `sdkmanager platforms;android-34 build-tools;34.0.0` + Gradle 8.7 → `gradle assembleDebug` → artifact `aifactory-debug-apk`。约 6–8 分钟。
+| 服务商 | 可用性 |
+|---|---|
+| 阿里 dashscope | `Bearer sk-…` 标准 OpenAI，可用 |
+| 百度千帆 v2 | `bce-v3/ALTAK-…/…` 可作 Bearer；模型需在控制台开通 |
+| 火山 ark | 必须标准 `Bearer` Key，格式错会报 `AuthenticationError` |
+| 讯飞星辰 | 普通应用 `ak-` **不能直接 Bearer**（`apikey not found`），需「调用密码」或 Token Plan 密钥；HMAC 签名未内置 |
+| DeepSeek | 标准 OpenAI；余额不足返回 402 |
 
-> 仓库里**没有 gradle wrapper 目录**，CI 直接调 `gradle`，不要指望 `./gradlew`。
+## 目录结构
 
----
-
-## 仓库结构
-
-| 分支 | 内容 | 用途 |
-|---|---|---|
-| `main`（默认分支） | 只有 README + 文档 | 仓库门面；`workflow_dispatch` 要求 workflow 文件在默认分支 |
-| `master` | runtime 构建流水线 + 补丁脚本 | 真正的 CI |
-| `app-0.2.2` | App 源码（Compose）+ `android-build.yml` | 出 APK。**分支名沿用历史，代码已是 0.5.3**；推送即构建 |
-| `aifactory-*` | 历史快照 | 存档，App 仍为 0.1.0 / targetSdk 34，**不要直接用** |
-
-Key 文件：
-
-```text
-.github/workflows/build-aifactory-runtime.yml   runtime 全流程（21 步）
-.github/workflows/android-build.yml             APK 构建
-.github/workflows/fixup-runtime-prefix.yml      已发布 zip 的一次性前缀修复
-.github/scripts/normalize-bootstrap-prefix.sh   bootstrap 前缀归一化（构建内也会调用）
+```
 app/src/main/java/com/aifactory/app/
-    Config.kt             RuntimePaths：硬编码 files/usr、默认三个下载地址
-    RuntimeEngine.kt      exec 封装、环境变量、statusReport()（✓/✗ 的唯一判据）
-    ArchiveInstaller.kt   解压 / 建软链 / chmod（不做路径重写）
-    PluginsPage.kt        插件中心：apt 包 + 文件探针 + 实时安装输出
+  AgentEngine.kt        Agent 主循环 + 工具实现 + 崩溃兜底（runGuarded）
+  Pool.kt               通道池：分片 / 粘滞 / 冷却 / 隔离
+  Secrets.kt            密钥脱敏（mask / scrub）
+  Sessions.kt           会话与聊天状态（进程级 + 落盘）
+  Packager.kt           五步构建链、清单修补、安装监控
+  VerifyRunner.kt       验证档位（PASS_UI / PASS / LAUNCHED_UNVERIFIED …）
+  VerifyA11yService.kt  无障碍读窗口文字与手势（可选）
+  GitOps.kt             git_push：向上找 .git、密钥扫描、Token 走请求头
+  FileHub.kt            文件中心（产物 / 附件，单列 LazyColumn）
+  MainActivity.kt       对话页 / 设置页 / 模型设置 / 通道池 UI
+  Config.kt             SharedPreferences 配置
+docs/regressions.md     回归台账 R-01…R-52，每条记录"为什么加这个约束"
+scripts/regression-guard.sh  源码断言闸门
 ```
 
----
+设备侧路径：
 
-## 发布资产
+| 用途 | 路径 |
+|---|---|
+| Runtime | `/data/data/com.aifactory.app/files/usr` |
+| 工作区 | `files/home/projects`（仓库根，一个顶级目录一个 app） |
+| SDK | `files/home/android-sdk`（build-tools 36.0.0、`lib/d8.jar`、`lib/apksigner.jar`） |
+| 归档产物 | `files/outputs/` |
+| 日志 | `files/home/.aifactory/logs/` |
+| 崩溃 | `files/home/.aifactory/logs/crash-*.txt` |
 
-**只想下载、不想看文档 → [`downloads`（下载总入口）](https://github.com/327542912/AIFactory/releases/tag/downloads)**，那里一张表列齐四个大文件的直链、体积、sha256。
+## 发布流水线（GitHub Actions）
 
+推送到分支 `app-0.2.2` 即触发 `.github/workflows/android-build.yml`：
 
-| tag | 资产 | 说明 |
+1. `gradle assembleDebug` 构建（JDK 21 + platform android-34 + Gradle 8.7）
+2. 校验产物非空、打印体积与 sha256
+3. 上传 artifact `aifactory-debug-apk`
+4. **把 APK 同步进 `main:apk/`**：`AIFactory-<版本>-debug.apk`、`AIFactory-latest.apk` 与对应 `.sha256`
+5. **更新 release `apk-latest`**（滚动替换，旧资产删除，避免下错版本）
+
+签名用的是仓库内 `keystore/aifactory-debug.jks`（密码 `aifactory`，别名 `aifactory`），所以 CI 出的包和本机出的包签名一致，可直接覆盖安装，不需要卸载。
+
+## 自己编译（宿主机）
+
+```bash
+export JAVA_HOME=$PWD/bt/jdk
+export PATH=$JAVA_HOME/bin:$PATH
+./tools/gradle-8.7/bin/gradle -p plug022 :app:assembleDebug --no-daemon --console=plain
+# 产物 plug022/app/build/outputs/apk/debug/app-debug.apk
+```
+
+验版本：`bt/aapt2x/aapt2 dump badging app-debug.apk | head -1`
+跑闸门：`cd plug022 && sh scripts/regression-guard.sh`（期望 `== 全部通过 ==`）
+
+## 版本线（近期）
+
+| 版本 | code | 内容 |
 |---|---|---|
-| [`runtime-latest`](https://github.com/327542912/AIFactory/releases/tag/runtime-latest) | `bootstrap-aarch64.zip` | 29,611,216 B，sha256 `45730c16…486343`（内含 runtime-repo + runtime-extra 两条源） |
-| [`runtime-repo`](https://github.com/327542912/AIFactory/releases/tag/runtime-repo) | 261 个 `.deb` + `Packages` / `Packages.gz` / `Release` | 平铺 apt 源，含 `openjdk-21` / `git` / `apksigner` / `zip` / `unzip`；坏掉的 `gradle 1.9.0.0` 已从索引和资产里剔除；**流水线每次重跑整份重建** |
-| [`runtime-extra`](https://github.com/327542912/AIFactory/releases/tag/runtime-extra) | `gradle_8.7-1_all.deb` + `Packages`（手动维护） | `gradle 1.9.0.0` 替代品，131,417,012 B，sha256 `027493b1…3ce09`；流水线不碰它 |
-| [`downloads`](https://github.com/327542912/AIFactory/releases/tag/downloads) | `DOWNLOAD.md`（下载总表） | 四个大文件的直链 + sha256 + 装法，不含二进制 |
-| [`sdk-latest`](https://github.com/327542912/AIFactory/releases/tag/sdk-latest) | `android-sdk-aarch64.zip` + `.sha256` | 143,210,636 B，sha256 `70d10e0a…6faa3`（3 个 platform + 3 个 build-tools + arm64 adb） |
-| [`apk-latest`](https://github.com/327542912/AIFactory/releases/tag/apk-latest) | `AIFactory-0.5.3-debug.apk` + `AIFactory-latest.apk` + 各自 `.sha256` | 覆盖升级用固定签名；每次构建自动替换 |
+| 0.10.23 | 93 | 设置页显示 GitHub 登录状态，401 时清空并给出重建指引 |
+| 0.10.22 | 92 | 应用内使用指南同步通道池/隔离/探测；首页介绍重写 |
+| 0.10.21 | 91 | 粘住可用端点：成功后不再轮转；限流时原地等 1 秒重试 |
+| 0.10.20 | 90 | 硬失败隔离：欠费/Key 错/模型不存在不再进候选，手动探测才解除 |
+| 0.10.19 | 89 | 通道池按 URL 段解析，不再死扣段数；丢弃原因逐行报出 |
+| 0.10.18 | 88 | 静默丢弃可视化、诊断探测（真实 HTTP 码 + 响应体）、页面显示版本号 |
+| 0.10.17 | 87 | Key 三层脱敏，历史记录也遮；首轮强制试一次 |
+| 0.10.16 | 86 | 修 4xx 提前退出（402/401 属于端点自身问题，应继续换） |
+| 0.10.15 | 85 | 通道池：调用计数分片 + 失败冷却 |
+| 0.10.14 | 84 | 崩溃兜底：`runGuarded` + 全局 uncaught handler，双通道全挂不再闪退 |
+| 0.10.13 | 83 | 双向熔断（后被隔离机制取代） |
+| 0.10.12 | 82 | 产物命名去掉 `debug` |
+| 0.10.11 | 81 | `git_push`：单仓库适配、密钥扫描、自动身份 |
+| 0.10.10 | 80 | 探测改打 `/chat/completions`（`/models` 探不出 1305） |
+| 0.10.9  | 79 | `git_push` 工具 + 文件中心整页单列 |
+| 0.10.8  | 78 | 无障碍验证服务 + `waitInstalled` 防误报 |
+| 0.10.7  | 77 | 五步链去掉 `zip` 依赖，改位置参数喂 flat |
+| 0.10.6  | 76 | `aapt2 -R` 改 `res.zip`（已废弃，见 R-28） |
 
-资产名固定、URL 稳定，App 里三个地址是写死的默认值，所以**不用改 App 就能换内容**。GitHub API 直传同名 asset 会 422，重发资产要先 `DELETE` 旧的。
+## 安全
 
----
+- Key 只以 `sk-****abcd` 出现；日志、聊天记录同样脱敏。
+- `git_push` 不把 Token 写进 `.git/config`，只用一次性 `http.extraheader`，输出统一 `redact()`。
+- 密钥扫描拦截 `apk/aab/jks/keystore/build/.gradle/local.properties`。
+- **Key 一旦出现在截图或聊天里，视为泄露，请去服务商后台撤销重建。**
 
 ## 已知限制
 
-| 问题 | 现状 / 原因 | 出路 |
-|---|---|---|
-| `aapt2` 是 ✗ | 官方 `build-tools` 里的 `aapt2` 为 x86_64 ELF，arm64 上无法执行 | 已解决：SDK 包里换 aarch64 静态版，构建时传 `-Pandroid.aapt2FromMavenOverride` |
-| 主源里的 `gradle` 是 1.9.0.0 | termux-packages 的配方就停在这个版本（Gradle 1.9 需要 JDK 8 时代环境） | 已用 `runtime-extra` 提供 Gradle 8.7（官方发行包重打包，`bin/gradle` 是 wrapper） |
-| `termux-setup-storage` 失效 | `bin/am` 调的是 `com.termux.termuxam.Am` 类名，包名不同 | 自造 `am` 桥接，或改用 `curl` 直接拉文件 |
-| 官方源不可用 | 官方包前缀是 `com.termux`，装进来路径全错 | 必须用自建 `runtime-repo` |
-| 每轮冷编 36+ 分钟 | `~/.termux-build` 不在挂载目录内 | 把缓存目录也挂出来 / 用自托管 runner |
-| 编 JDK 会撞 CMake 4 | 老配方写 `cmake_minimum_required(VERSION 2.8)`，CMake ≥ 4 直接报错 | 已在 workflow 里给全局 CMake 传 `CMAKE_POLICY_VERSION_MINIMUM=3.5` |
-| `command-not-found` 已被剔除 | 它的 `generate-db.js` 拿官方镜像的 `Contents-<arch>.gz` 匹配 `bin/`，前缀不同必然失配并 `exit 1` | 需要的话自己生成索引 |
-| 仓库无 LICENSE 文件 | Runtime 派生自 GPL-3.0 的 `termux-packages` | 分发二进制前先定许可，别直接商用 |
+- `targetSdk 28`，无法上架 Google Play。
+- 无障碍不能程序化开关（无 `WRITE_SECURE_SETTINGS` / adb），需用户手动启用一次。
+- 讯飞星辰普通应用鉴权未内置 HMAC 签名。
+- 设备上 `zip` / `wget` 不存在，脚本按 `curl` 与位置参数实现。
 
----
+## License
 
-## 排错
-
-| 症状 | 原因 | 处理 |
-|---|---|---|
-| 日志 `Finished successfully` 但步骤红 | `run-docker.sh` 的 trap 覆盖退出码 | 只看 zip 是否落盘，rc 忽略 |
-| `CMake Error ... Compatibility with CMake < 3.5` | CMake 4 拒收老 `cmake_minimum_required` | 传 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` |
-| `bad interpreter` | 脚本 shebang 仍是 `com.termux` 前缀 | 用 `bash script.sh` 调，或跑 `normalize-bootstrap-prefix.sh` |
-| `pkg` 一执行就报找不到 `termux-setup-package-manager` | 脚本正文里残留旧前缀 | 同上，归一化后旧前缀必须 0 处 |
-| `apt update` 报 `Ign ... InRelease` | 平铺源没有 `InRelease`，属正常 | 忽略；`Release` / `Packages` 拉到即成功 |
-| 装完 `java` 仍 ✗ | JDK 在 `opt/openjdk/bin/java`，或安装中途失败 | 看设置页 `Runtime 安装完成` 之后手动 `ls files/usr/bin/java files/usr/opt` |
-| 构建中断后再跑还是 36 分钟 | 无缓存 | 见「已知限制」 |
-
----
-
-## 状态
-
-- [x] 源码重编的 ARM64 bootstrap（自建前缀，已发布）
-- [x] 自建 apt 源（`pkg install` 可用）
-- [x] App 0.2.13：**真 PTY 终端**（vendor Termux `terminal-emulator` + `terminal-view`，`libtermux.so` 预编译进 `jniLibs`）、下载器断点续传、加速前缀、本地 deb 安装
-- [x] 终端配色跟随主题（浅色/深色两套 ANSI 调色板，修「白底浅字、黑底黑字」）；设置页与插件页共用安装互斥，避免抢 dpkg lock；新增「清理卡死的 apt/dpkg 锁」
-- [x] openjdk-21 的 4 个 Depends 库包（552 KB）打进 APK Assets，随 App 进本地仓库，离线也能装
-- [x] 存储权限：声明并运行时申请 `READ/WRITE_EXTERNAL_STORAGE`（targetSdk 28 legacy storage），终端可直接读 `/sdcard`；文件页每项新增「复制到 ~/projects」（真实拷字节）
-- [x] 终端配色跟随主题（浅色/深色两套 ANSI 调色板，修「白底浅字、黑底黑字」）；设置页与插件页共用安装互斥，避免抢 dpkg lock；新增「清理卡死的 apt/dpkg 锁」
-- [x] openjdk-21 的 4 个 Depends 库包（552 KB）打进 APK Assets，随 App 进本地仓库，离线也能装
-- [x] 存储权限：声明并运行时申请 READ/WRITE_EXTERNAL_STORAGE（targetSdk 28 legacy storage），终端可直接读 /sdcard；文件页每项新增「复制到 ~/projects」（真实拷字节）
-- [x] 离线安装通路：本地 deb 仓库（`files/localrepo`）+ 用 `dpkg-deb -f` 生成 `Packages`/`Release` + `file://` 源，apt 解析失败自动回退 `dpkg -i --force-depends`；设置页新增「修复 dpkg 状态」
-- [x] 会话状态不再随切页丢失：对话记录/草稿、插件安装日志、Runtime 安装进度都提到进程级（`ChatRunner` / `PluginRunner` / `SetupRunner`），聊天记录落盘 `home/.aifactory/chat.json`
-- [x] 终端可用性修复：`onTextChanged → onScreenUpdated` 恢复回显重画（0.2.10 清空它导致「打字没反应、切页才刷新」）；长按进入文本选择模式（复制/粘贴菜单）；缺 `usr` 时启动自愈回 `usr-old`；Runtime 替换失败自动回滚
-- [x] JDK 21 / git / apksigner / zip / unzip 进 `runtime-repo`（264 个 deb，前缀全部核对过 0 处 `com.termux`）
-- [x] Gradle 8.7 走独立 `runtime-extra` 源（绕开主源的 1.9.0.0）
-- [x] Android SDK 单一 zip 覆盖 34/35/36 + arm64 adb
-- [x] 固定签名 keystore：0.2.3 → 0.5.3 指纹一致（`05fc565e…`），可覆盖升级不丢 `/data/data` 数据
-- [x] `scripts/device-build.sh`：设备端构建 → 验签 → 安装（Shizuku）→ 启动 → 扫 `FATAL EXCEPTION`
-- [ ] 设备端真跑通一次 `gradle assembleDebug`（脚本已就位，等你手机上跑）
-- [ ] arm64 版 Android SDK 打包
-- [ ] 设备端 `bash build_termux.sh` 出 APK 全链路跑通
-
----
-
-## 致谢
-
-构建系统来自 [termux-packages](https://github.com/termux/termux-packages) 及其 fork [agnostic-apollo/termux-packages](https://github.com/agnostic-apollo/termux-packages)。没有 Termux 团队十几年的配方积累，这套 prefix 重编方案不可能落地。
-
-## 真机现状（2025-11-22 实测日志）
-
-```
-~/projects $ git --version        → git version 2.50.1
-~/projects $ gradle -v            → Gradle 8.7 / JVM 21.0.8 (Termux) / OS Linux 6.1.138-android14 aarch64
-~/projects $ $PREFIX/bin/java -version → openjdk version "21.0.8" 2025-07-15
-~/projects $ $PREFIX/bin/bash -c 'echo ok' → ok
-```
-
-四项全部可用。JDK 能装上的关键在四点：先 `dpkg -P apt-ftptarchive apt-transport-tor db` 清掉缺 `libdb`/`tor` 的坏包；再 `dpkg -i --force-depends` 装 `libandroid-shmem` / `libandroid-spawn` / `libjpeg-turbo` / `littlecms` 四个 `.so`；最后 `dpkg --configure -a` 让 `openjdk-21` 的 `postinst` 用 `update-alternatives` 建 `bin/java`。装 `apt` 包时它会覆盖 `etc/apt/sources.list` 成官方 `packages-cf.termux.dev`，必须立刻用 `echo 'deb [trusted=yes] file:///data/data/com.aifactory.app/files/localrepo ./' > $PREFIX/etc/apt/sources.list` 改回。
-
-### 全局调度（0.4.0）
-
-此前是四个互不相干的执行体：`ChatRunner`（对话）、`PluginRunner`（apt 装插件）、`SetupRunner`（runtime/SDK/deb）、`ProjectsScreen` 里的 `rememberCoroutineScope` 局部 job（构建）。它们只靠互斥互相躲（避免抢 dpkg 锁），没有队列、没有阶段、没有产物登记；项目构建还挂在页面作用域上，切页即被取消。
-
-0.4.0 新增 `Pipeline.kt`：单一串行调度器。所有长任务排同一条队列，同一时刻只跑一个，阶段与日志落盘 `home/.aifactory/jobs.json`，产物登记 `Pipeline.lastApk`。`ProjectsScreen` 的构建、`AgentEngine.build_apk` 都走它，所以切页不丢、不取消，也不会和排队的 apt 抢锁。
-
-仍未做（按优先级）：① 全局 `ProjectContext`（当前项目/包名/最近产物）让对话、项目、文件、打包页共享同一份真相；② 产物中心（outputs 里 APK 统一登记名字/大小/sha256/来源任务）；③ 流程模板（新建工程→构建→签名做成可点选 chain），目前只靠模型即兴组合工具。
-
-### 终端多会话（0.5.0）
-
-`TerminalHost` 管理多个 `AiTerminalBridge`，一个标签 = 一条独立 bash/PTY（各自 cwd、环境、前台进程）。可新建（`+ 新标签`）、切换、关闭（标签内 `×`，至少保留一个）。之前是单会话，`重开会话` 只是重启同一个 bash。
+私有项目，未授权不得分发。签名密钥 `keystore/release.jks` 不随源码分发。
