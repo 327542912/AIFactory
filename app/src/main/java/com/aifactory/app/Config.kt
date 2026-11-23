@@ -67,6 +67,16 @@ class AppConfig(context: Context) {
         get() = get("backup_api_key", "")
         set(v) = put("backup_api_key", v)
 
+    /** 每次任务开始先探测主/备通道延迟与可用性，别让用户拿 3 次失败去换一次切换。 */
+    var autoProbe: Boolean
+        get() = p.getBoolean("auto_probe", true)
+        set(v) = p.edit().putBoolean("auto_probe", v).apply()
+
+    /** 额外通道池：一行一个，格式 `名称|baseUrl|模型|Key`（Key 省略则用主通道 Key）。 */
+    var extraChannels: String
+        get() = get("extra_channels", "")
+        set(v) = put("extra_channels", v)
+
     val hasBackup: Boolean
         get() = backupBaseUrl.isNotBlank() && backupModel.isNotBlank()
 

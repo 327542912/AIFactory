@@ -172,7 +172,7 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
         }
 
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val out = File(RuntimePaths.outputs(ctx), "${root.name}-$variant-$stamp.apk")
+        val out = File(RuntimePaths.outputs(ctx), "${root.name}-$stamp.apk")
         out.parentFile?.mkdirs()
         finalApk.copyTo(out, overwrite = true)
         return BuildResult(true, out, "构建成功：${out.name}（${out.length() / 1024} KB）", r.output)
@@ -390,8 +390,13 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
                 val srcList = lay.javaDirs.joinToString(" ") { shQuote(it.path) }
                 if (resDir != null) {
                     // aapt2 的 -R 只认 .flat / .flat 的 zip；喂目录会报 "Is a directory"（R-28）
-                    appendLine("\$AAPT2 compile --dir " + q(resDir.path) + " -o \$B/res.zip")
-                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " -R \$B/res.zip --auto-add-overlay --java \$B/gen --min-sdk-version 26 --target-sdk-version 28")
+                    // 关键：设备 Runtime 里没有 zip 命令（apt 源也没有），所以不能走 res.zip + -R。
+                    // 把编译出的 .flat 全部当作位置参数喂给 link，等价于 base 资源，不需要 overlay。
+                    appendLine("rm -rf \$B/flat && mkdir -p \$B/flat")
+                    appendLine("\$AAPT2 compile --dir " + q(resDir.path) + " -o \$B/flat")
+                    appendLine("FL=$(find \$B/flat -name '*.flat' | sort | tr '\\n' ' ')")
+                    appendLine("if [ -z \"\$FL\" ]; then echo '没有编译出任何 .flat（res 目录为空？）'; exit 9; fi")
+                    appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " --auto-add-overlay --java \$B/gen --min-sdk-version 26 --target-sdk-version 28 \$FL")
                 } else {
                     appendLine("\$AAPT2 link -o \$B/base.apk -I \$JAR --manifest " + q(manifest.path) + " --java \$B/gen --min-sdk-version 26 --target-sdk-version 28")
                 }
@@ -420,7 +425,8 @@ class Packager(private val ctx: Context, private val rt: RuntimeEngine) {
             return BuildResult(false, null, "本地编译失败（退出码 " + r.exitCode + "）：\n" + tailText(r.output, 2500), r.output)
         }
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val out = File(RuntimePaths.outputs(ctx), root.name + "-debug-" + stamp + ".apk")
+        // 签名恒用 release.jks（CN=AIFactory），命名不再写 debug，避免"文案与实际不符"
+        val out = File(RuntimePaths.outputs(ctx), root.name + "-" + stamp + ".apk")
         out.parentFile?.mkdirs()
         apk.copyTo(out, overwrite = true)
 

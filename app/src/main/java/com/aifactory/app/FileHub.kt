@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -118,6 +119,15 @@ fun openImportedFile(context: Context, file: FileRecord): String? {
     }
 }
 
+/** 构建产物：build_apk / build_aab 落到 files/outputs 的 apk、aab，按时间倒序。 */
+fun listOutputs(ctx: Context, limit: Int = 12): List<File> = runCatching {
+    RuntimePaths.outputs(ctx).listFiles()
+        ?.filter { it.isFile && (it.extension == "apk" || it.extension == "aab") }
+        ?.sortedByDescending { it.lastModified() }
+        ?.take(limit)
+        ?: emptyList()
+}.getOrDefault(emptyList())
+
 fun formatFileSize(bytes: Long): String {
     if (bytes < 0) return "大小未知"
     if (bytes < 1024) return "$bytes B"
@@ -130,21 +140,31 @@ fun formatFileSize(bytes: Long): String {
 
 @Composable
 fun FileCenterPage(
+    ctx: Context,
     files: List<FileRecord>,
     onImport: () -> Unit,
     onOpen: (FileRecord) -> Unit,
     onRemove: (FileRecord) -> Unit,
-    onCopyToProjects: (FileRecord) -> Unit = {}
+    onCopyToProjects: (FileRecord) -> Unit = {},
+    onInstallOutput: (File) -> Unit = {},
+    onDeleteOutput: (File) -> Unit = {}
 ) {
-    Column(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    var tick by remember { mutableStateOf(0) }
+    val outputs = remember(tick) { listOutputs(ctx) }
+    var pendingDelete by remember { mutableStateOf<File?>(null) }
+
+    // 整页只有一个 LazyColumn：头部、卡片、产物、导入文件全部是它的 item，才滚得动、才点得到
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Column(Modifier.weight(1f)) {
-                Text("文件中心", style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold)
-                Text("${files.size} 个已导入文件", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("文件中心", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Text(
+                    "产物 " + outputs.size + " 个 · 导入 " + files.size + " 个",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp
+                )
             }
             Button(onClick = onImport) {
                 Icon(Icons.Default.Add, contentDescription = null)
@@ -153,38 +173,104 @@ fun FileCenterPage(
             }
         }
 
-        Card {
-            Column(Modifier.padding(12.dp)) {
-                Text("支持任意格式", fontWeight = FontWeight.SemiBold)
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Card {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("构建产物", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "build_apk / build_aab 生成的安装包，都在这里。点「安装」直接装，右侧可删除。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (outputs.isEmpty()) {
+                item {
+                    Card {
+                        Text(
+                            "还没有产物。在对话页构建一次，APK 会出现在这里。",
+                            Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                items(outputs, key = { "out:" + it.path }) { f ->
+                    Card {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (f.extension == "apk") Icons.Default.Android else Icons.Default.InsertDriveFile,
+                                null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(f.name, fontWeight = FontWeight.Medium, maxLines = 2)
+                                Text(
+                                    formatFileSize(f.length()) + " · " +
+                                        java.text.SimpleDateFormat("MM-dd HH:mm", Locale.US).format(java.util.Date(f.lastModified())),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (f.extension == "apk") {
+                                TextButton(onClick = { onInstallOutput(f) }) { Text("安装", fontSize = 12.sp) }
+                            }
+                            IconButton(onClick = { pendingDelete = f }) {
+                                Icon(Icons.Default.DeleteOutline, "删除产物", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
                 Text(
-                    "图片、音视频、PDF、Office、ZIP、APK、源码和本地模型均可选择。文件保留在原位置，AIFactory 保存访问授权和文件信息。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "已导入文件（" + files.size + "）",
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp)
                 )
             }
-        }
 
-        if (files.isEmpty()) {
-            Column(
-                Modifier.fillMaxWidth().weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(Icons.Default.FolderOpen, null, Modifier.size(56.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                Text("还没有导入文件")
-                Text("点击右上角「导入文件」开始", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            item {
+                Card {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("支持任意格式", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text(
+                            "图片、音视频、PDF、Office、ZIP、APK、源码和本地模型均可选择。文件保留在原位置，AIFactory 保存访问授权和文件信息。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+
+            if (files.isEmpty()) {
+                item {
+                    Card {
+                        Text(
+                            "还没有导入文件。点右上角「导入文件」开始。",
+                            Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
                 items(files, key = { it.uri }) { file ->
                     Card {
                         Row(
-                            Modifier.fillMaxWidth().clickable { onOpen(file) }.padding(12.dp),
+                            Modifier.fillMaxWidth().clickable { onOpen(file) }
+                                .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -198,17 +284,16 @@ fun FileCenterPage(
                                 },
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             )
-                            Spacer(Modifier.width(12.dp))
+                            Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(file.name, fontWeight = FontWeight.Medium,
-                                    maxLines = 2)
+                                Text(file.name, fontWeight = FontWeight.Medium, maxLines = 2)
                                 Text(
-                                    "${formatFileSize(file.size)} · ${file.mime}",
+                                    formatFileSize(file.size) + " · " + file.mime,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2
+                                    maxLines = 1
                                 )
                             }
                             IconButton(onClick = { onCopyToProjects(file) }) {
@@ -223,8 +308,25 @@ fun FileCenterPage(
             }
         }
     }
-}
 
+    pendingDelete?.let { f ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除产物？") },
+            text = { Text(f.name + "\n删除后要重新构建才能再生成。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteOutput(f)
+                    pendingDelete = null
+                    tick++
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            }
+        )
+    }
+}
 
 /** 把 SAF 里选中的文件真正拷进 ~/projects（终端能直接用）。返回 null 表示成功。 */
 fun copyFileToProjects(context: android.content.Context, record: FileRecord): String? {

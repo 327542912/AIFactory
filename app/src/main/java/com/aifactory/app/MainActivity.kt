@@ -60,6 +60,14 @@ class MainActivity : ComponentActivity() {
             if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1001)
         }
         Thread { runCatching { RuntimeRepair.ensureUsr(applicationContext) } }.start()
+        // 任何线程的未捕获异常都先落盘，别再"闪退到毫无线索"
+        runCatching {
+            val prev = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { t, e ->
+                runCatching { crashLog(applicationContext, "uncaught-" + t.name, e) }
+                prev?.uncaughtException(t, e)
+            }
+        }
         setContent {
             AIFactoryApp { command ->
                 RuntimeEngine(applicationContext).execute(command)
@@ -147,6 +155,7 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
                     )
                     Page.PROJECTS -> ProjectsScreen()
                     Page.FILES -> FileCenterPage(
+                        ctx = context,
                         files = importedFiles,
                         onImport = launchFilePicker,
                         onOpen = { file ->
@@ -161,6 +170,22 @@ private fun AIFactoryApp(runCommand: suspend (String) -> String) {
                                 context,
                                 err ?: ("已复制到 ~/projects/" + file.name),
                                 if (err == null) android.widget.Toast.LENGTH_SHORT else android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        },
+                        onInstallOutput = { f ->
+                            Installer.install(context, f,
+                                runCatching {
+                                    @Suppress("DEPRECATION")
+                                    context.packageManager.getPackageArchiveInfo(f.path, 0)?.packageName
+                                }.getOrNull()
+                            )
+                        },
+                        onDeleteOutput = { f ->
+                            val ok = runCatching { f.delete() }.getOrDefault(false)
+                            android.widget.Toast.makeText(
+                                context,
+                                if (ok) "已删除 " + f.name else "删除失败（文件可能被占用）",
+                                android.widget.Toast.LENGTH_SHORT
                             ).show()
                         },
                         onRemove = { file ->
@@ -324,6 +349,80 @@ private fun ChatPage(
                         trailingIcon = { TextButton(onClick = { showBkKey = !showBkKey }) { Text(if (showBkKey) "隐藏" else "显示", fontSize = 11.sp) } },
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    val scope = rememberCoroutineScope()
+                    var probeMsg by remember { mutableStateOf(Channel.note) }
+                    Text(
+                        "通道池 " + Pool.slots.size + " 个 · 第 " + Pool.turn + " 轮：" + (if (Pool.slots.isEmpty()) "（未配置）" else Pool.summary()),
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        color = if (Channel.active()) Accent else Muted
+                    )
+                    val pkgCtx = androidx.compose.ui.platform.LocalContext.current
+                    val ver = runCatching {
+                        val pi = pkgCtx.packageManager.getPackageInfo(pkgCtx.packageName, 0)
+                        pi.versionName + " · code " + (if (android.os.Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong())
+                    }.getOrElse { "?" }
+                    Text("当前安装版本：" + ver, fontSize = 10.sp, color = Muted)
+                    if (Pool.warnings.isNotEmpty()) Text("⚠ " + Pool.warnings.joinToString("\n⚠ "), fontSize = 10.sp, color = Color(0xFFC0392B))
+                    if (probeMsg.isNotBlank()) Text(probeMsg, fontSize = 10.sp, color = Muted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = {
+                            scope.launch {
+                                probeMsg = "探测中…"
+                                Channel.clearDead()
+                                Pool.reset(); Pool.sync(cfg)
+                                val keys = Secrets.knownKeys(cfg)
+                                val lines = ArrayList<String>()
+                                for (sl in Pool.slots) {
+                                    val (code, mss, body) = withContext(Dispatchers.IO) { probeRaw(sl.base, sl.model, sl.key) }
+                                    Pool.probeResult(sl, code, body)   // 探测成功 → 解除隔离并回到候选池；失败 → 刷新隔离原因
+                                    lines += sl.label + " → " + (if (code in 200..299) "✅ OK " + mss + "ms（已解除隔离）" else "HTTP " + code + "：" + Secrets.scrub(body, keys) + "（继续隔离）")
+                                }
+                                val warn = if (Pool.warnings.isEmpty()) "" else "\n⚠ " + Pool.warnings.joinToString("\n⚠ ")
+                                probeMsg = if (lines.isEmpty()) "池里没有端点" + warn else lines.joinToString("\n") + warn
+                            }
+                        }) { Text("探测通道", fontSize = 11.sp) }
+                        TextButton(onClick = {
+                            Pool.reset(); probeMsg = "已清零所有通道的调用计数、冷却与隔离"
+                        }) { Text("重置冷却", fontSize = 11.sp) }
+                        TextButton(onClick = {
+                            Pool.clearQuarantine(); probeMsg = "已解除全部隔离（下次请求会再试它们）"
+                        }) { Text("解除隔离", fontSize = 11.sp) }
+                        TextButton(onClick = {
+                            cfg.autoProbe = !cfg.autoProbe; Channel.reset()
+                            probeMsg = "自动探测已" + (if (cfg.autoProbe) "开启" else "关闭")
+                        }) { Text(if (cfg.autoProbe) "自动探测：开" else "自动探测：关", fontSize = 11.sp) }
+                    }
+
+                    // 通道池：一行一个 `名称|baseUrl|模型|Key`，留空 Key 表示复用主通道 Key
+                    var poolText by remember { mutableStateOf(cfg.extraChannels.ifBlank { "" }) }
+                    Text("通道池（每行：名称|baseUrl|模型|Key，最多 6 个）", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(
+                        value = poolText,
+                        onValueChange = {
+                            poolText = it
+                            cfg.extraChannels = it
+                            Pool.sync(cfg)
+                        },
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp),
+                        modifier = Modifier.fillMaxWidth().height(110.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = {
+                            val add = "硅基|https://api.siliconflow.cn/v1|zhipuai/GLM-Z1-9B-0414|" + cfg.apiKey
+                            cfg.extraChannels = (cfg.extraChannels.trimEnd() + "\n" + add).trimStart('\n')
+                            poolText = cfg.extraChannels
+                            Pool.sync(cfg)
+                            probeMsg = "已加入硅基通道"
+                        }) { Text("+硅基", fontSize = 11.sp) }
+                        TextButton(onClick = {
+                            val add = "本地|http://127.0.0.1:8080/v1|local|"
+                            cfg.extraChannels = (cfg.extraChannels.trimEnd() + "\n" + add).trimStart('\n')
+                            poolText = cfg.extraChannels
+                            Pool.sync(cfg)
+                            probeMsg = "已加入本地 llama.cpp"
+                        }) { Text("+本地", fontSize = 11.sp) }
+                    }
                 }
             }
         }
@@ -608,9 +707,11 @@ private fun AdbCard() {
 
 @Composable
 private fun SettingsPage() {
+    val a11yCtx = LocalContext.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("AIFactory ${BuildConfig.VERSION_NAME} · 独立 Runtime · Android AI Development Workspace", color = Muted)
+        A11yCard(a11yCtx)
         GuideCard()
         GitHubCard()
         AdbCard()
@@ -619,6 +720,34 @@ private fun SettingsPage() {
             Column(Modifier.padding(16.dp)) {
                 Text("安全策略", fontWeight = FontWeight.SemiBold)
                 Text("构建、测试和工作区内修改可自动化。删除数据、访问凭据、网络外发、安装插件和正式发布需要审批。", fontSize = 13.sp, lineHeight = 20.sp)
+            }
+        }
+    }
+}
+
+/** 无障碍自动化验证的开关入口：没开就读不到界面，只能给"已启动、未验证"。 */
+@Composable
+private fun A11yCard(ctx: Context) {
+    var tick by remember { mutableStateOf(0) }
+    val ready = remember(tick) { A11y.ready(ctx) }
+    val opened = remember(tick) { A11y.enabled(ctx) }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("自动化验证（无障碍）", fontWeight = FontWeight.SemiBold)
+            Text(
+                when {
+                    ready -> "已开启：装好后我会自己读界面文字、发一次滑动手势，给出 PASS_UI / CRASH_UI / BLANK_UI。"
+                    opened -> "开关已开，但系统还没连上服务：回一次 AIFactory 或点「刷新状态」。"
+                    else -> "未开启：现在只能确认「启动了」，界面是不是崩的、白屏的，我看不见。"
+                },
+                fontSize = 12.sp, lineHeight = 18.sp,
+                color = if (ready) Accent else Muted
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { A11y.openSettings(ctx) }) {
+                    Text(if (opened) "去无障碍设置" else "开启无障碍", fontSize = 12.sp)
+                }
+                TextButton(onClick = { tick++ }) { Text("刷新状态", fontSize = 12.sp) }
             }
         }
     }

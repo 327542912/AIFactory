@@ -44,14 +44,22 @@ object VerifyRunner {
         }.getOrNull()
         onLine("包名：" + (pkg ?: "解析失败"))
 
-        // 1) 安装（系统安装器，需要用户在弹窗点确认；这条绕不过去，Android 不允许静默装）
+        val wantVer = runCatching {
+            @Suppress("DEPRECATION")
+            ctx.packageManager.getPackageArchiveInfo(apk.path, 0)?.versionName
+        }.getOrNull()
+        onLine("版本：" + (wantVer ?: "未知"))
+
+        // 1) 安装（系统安装器需要用户点确认，这条绕不过去）+ 轮询"真的装上了"
+        val before = installedStamp(ctx, pkg)
         val installMsg = Installer.install(ctx, apk, pkg) { line -> onLine(line) }
         onLine("安装：" + installMsg.replace("\n", " ").take(300))
-        val installed = pkg != null && runCatching { ctx.packageManager.getPackageInfo(pkg, 0) }.isSuccess
-        if (!installed) {
-            val detail = "没装上（用户没确认弹窗，或签名冲突）。安装结果：" + installMsg
+        val installedNow = waitInstalled(ctx, pkg, wantVer, before, 90) { line -> onLine(line) }
+        if (!installedNow) {
+            val detail = "90 秒内没检测到新版本装上（弹窗没点确认，或签名冲突）。安装结果：" + installMsg
             return Result("NOT_INSTALLED", detail, write(dir, name, "NOT_INSTALLED", detail, apk, pkg, null))
         }
+        onLine("安装确认：包 " + pkg + " 已是版本 " + (wantVer ?: "?"))
 
         // 2) 启动
         val launch = Launch.launch(ctx, pkg)
@@ -60,36 +68,112 @@ object VerifyRunner {
             val detail = "装上了但点不开：" + launch
             return Result("NO_LAUNCHER", detail, write(dir, name, "NO_LAUNCHER", detail, apk, pkg, null))
         }
+        Thread.sleep(2500)
 
-        // 3) 有 adb 才有真相：崩溃栈 + 截图判定
-        val adb = AdbBridge(ctx, rt)
-        val crash = if (adb.available()) {
-            Thread.sleep(2500)
-            val log = adb.crashLog(pkg)
-            onLine("logcat(crash)：" + (if (log.isBlank()) "（空）" else log.takeLast(1200)))
-            log
+        // 3) 无障碍在 → 真看一下界面、真动一下手
+        var uiVerdict: String? = null
+        var uiDetail = ""
+        var shot: File? = null
+        var crashLog = ""
+        if (A11y.ready(ctx)) {
+            val top = A11y.topPackage()
+            onLine("前台包名：" + (top ?: "读不到"))
+            if (top != null && pkg != null && top != pkg) {
+                uiVerdict = "NO_FOREGROUND"
+                uiDetail = "启动后前台是 " + (top ?: "未知") + "，不是 " + (pkg ?: "?") + "（没起来、被别的窗口盖住，或闪退回桌面）。"
+            } else {
+                val crash = A11y.crashSignal()
+                if (crash != null) {
+                    uiVerdict = "CRASH_UI"
+                    uiDetail = "界面上出现崩溃/无响应弹窗：" + crash
+                } else {
+                    val texts = A11y.texts(30)
+                    if (texts.isEmpty()) {
+                        uiVerdict = "BLANK_UI"
+                        uiDetail = "前台是我们这个包，但读不到任何界面文字（很可能白屏/没渲染）。"
+                    } else {
+                        // 真动一下手：从屏幕中部下滑，再等 1.2s 看是否仍在我们的界面
+                        @Suppress("DEPRECATION")
+                        val dm = ctx.resources.displayMetrics
+                        val acted = A11y.swipe(dm.widthPixels / 2f, dm.heightPixels * 0.72f, dm.widthPixels / 2f, dm.heightPixels * 0.42f, 200L)
+                        Thread.sleep(1200)
+                        val after = A11y.topPackage()
+                        val crash2 = A11y.crashSignal()
+                        if (crash2 != null) {
+                            uiVerdict = "CRASH_UI"
+                            uiDetail = "滑动手势之后崩溃：" + crash2
+                        } else if (acted && after != null && pkg != null && after != pkg) {
+                            uiVerdict = "GESTURE_LEFT"
+                            uiDetail = "滑动手势后前台变成 " + after + "（手势被响应但跳走了，或崩溃回桌面）。"
+                        } else {
+                            uiVerdict = "PASS_UI"
+                            uiDetail = "前台是 " + pkg + "，读到 " + texts.size + " 条界面文字；发了一次上滑手势，界面仍在。" +
+                                "\n界面文字：" + texts.take(12).joinToString(" | ")
+                        }
+                    }
+                }
+            }
         } else {
-            onLine("adb 未连接：拿不到 logcat 与截图（Android 不允许第三方 App 读别的进程日志）")
-            ""
+            onLine("无障碍未开启：读不到界面文字，只能确认\"启动了\"")
         }
-        val shot = if (adb.available()) adb.screenshot(File(dir, "build/verify-screen.png")) else null
-        val blank = if (shot != null) ImageCheck.isProbablyBlank(shot) else null
-        if (shot != null) onLine("截图：" + shot.path + "，空白判定=" + blank)
 
-        val cachedCrash = crash.contains(pkg) || crash.contains("FATAL EXCEPTION")
+        // 4) 有 adb 再加一层：真崩溃栈 + 截图
+        val adb = AdbBridge(ctx, rt)
+        if (adb.available()) {
+            crashLog = adb.crashLog(pkg ?: "")
+            onLine("logcat(crash)：" + (if (crashLog.isBlank()) "（空）" else crashLog.takeLast(1200)))
+            shot = adb.screenshot(File(dir, "build/verify-screen.png"))
+            if (shot != null) onLine("截图：" + shot.path + "，空白判定=" + ImageCheck.isProbablyBlank(shot))
+        }
+
+        val fatal = crashLog.contains("FATAL EXCEPTION") || crashLog.contains(pkg ?: "___")
         val verdict = when {
-            cachedCrash -> "CRASH"
-            blank == true -> "BLANK"
+            fatal -> "CRASH"
+            uiVerdict != null -> uiVerdict
+            adb.available() && shot != null && ImageCheck.isProbablyBlank(shot) -> "BLANK"
             adb.available() -> "PASS"
             else -> "LAUNCHED_UNVERIFIED"
         }
         val detail = when (verdict) {
-            "CRASH" -> "检测到崩溃栈：\n" + crash.takeLast(1500)
-            "BLANK" -> "截图近乎纯色（白/黑），界面很可能没渲染出来，或应用崩了留下空窗口。"
+            "CRASH" -> "logcat 里有崩溃栈：\n" + crashLog.takeLast(1500)
+            "PASS_UI" -> uiDetail
             "PASS" -> "已启动，logcat 无本包崩溃，截图非空白。"
-            else -> "已启动，但没有 adb：看不到崩溃栈与界面。装 adb 后这条才会升级为 PASS。"
+            "BLANK" -> "截图近乎纯色，界面很可能没渲染出来。"
+            "LAUNCHED_UNVERIFIED" -> "已启动，但没有 adb、也没有开无障碍：看不到界面。去 设置 → 自动化验证 开启无障碍后重跑，才会给出 PASS_UI。"
+            else -> uiDetail.ifBlank { "已启动，判定 " + verdict }
         }
         return Result(verdict, detail, write(dir, name, verdict, detail, apk, pkg, shot))
+    }
+
+    private fun installedStamp(ctx: Context, pkg: String?): Long = runCatching {
+        @Suppress("DEPRECATION")
+        ctx.packageManager.getPackageInfo(pkg!!, 0).lastUpdateTime
+    }.getOrDefault(-1L)
+
+    /** 等系统把新版本装上：版本号对得上，或 lastUpdateTime 变了。 */
+    private fun waitInstalled(
+        ctx: Context, pkg: String?, wantVer: String?, before: Long,
+        seconds: Int, onLine: (String) -> Unit
+    ): Boolean {
+        if (pkg == null) return false
+        val deadline = System.currentTimeMillis() + seconds * 1000L
+        var lastNote = 0L
+        while (System.currentTimeMillis() < deadline) {
+            val info = runCatching {
+                @Suppress("DEPRECATION")
+                ctx.packageManager.getPackageInfo(pkg, 0)
+            }.getOrNull()
+            if (info != null) {
+                val verOk = wantVer == null || info.versionName == wantVer
+                if (verOk && info.lastUpdateTime >= before) return true
+            }
+            if (System.currentTimeMillis() - lastNote > 15000) {
+                onLine("等待安装确认…（点了弹窗里的「安装」我会自动继续）")
+                lastNote = System.currentTimeMillis()
+            }
+            Thread.sleep(500)
+        }
+        return false
     }
 
     private fun write(

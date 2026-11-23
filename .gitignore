@@ -1,12 +1,6 @@
-.gradle/
-.kotlin/
-build/
-app/build/
-local.properties
-projects/
-.backups/
 *.apk
 *.aab
-*.log
-runtime-cache/
-runtime-data/
+keystore/*.jks
+local.properties
+build/
+app/build/

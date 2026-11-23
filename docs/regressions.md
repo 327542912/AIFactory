@@ -36,3 +36,83 @@
 | R-27 | 清单引用 `@mipmap/ic_launcher_round` 但文件不存在，aapt2 报 `not found` + `failed processing manifest` | 手工链没有 AGP 的默认图标；Agent 用 ImageMagick 造图标又没造 round 版本 | 0.10.5 | `Packager.kt` 含 `ensureIcons(` |
 | R-28 | 构建脚本把 `app/build/res`（目录）喂给 `aapt2 link -R`，报 `failed to read magic / Is a directory` | `aapt2 compile --dir res -o $B/res` 产出目录，又被直接当 `-R` 参数；aapt2 只认 .flat 或 zip，且 zip 必须配 `--auto-add-overlay` | 0.10.6 | `Packager.kt` 含 `-o \$B/res.zip` 与 `--auto-add-overlay`；宿主实测：目录→失败，zip+auto-add-overlay→1,351 B apk |
 | R-29 | 项目 themes.xml 用 `Theme.AppCompat`、源码继承 `AppCompatActivity`，手工链必败 | 零 gradle 链没有 AppCompat/Material | 0.10.6 | `Packager.kt` 含 `fixAppCompatTheme(` 与 androidx 预检 |
+| R-30 | 主通道 429 时每条请求都要白撞 3 次（2+4+6=12s）才切备用，下一轮又从主通道开始，整场体验像卡死 | 切换是「请求级」而不是「会话级」，也没有探活 | 0.10.7 | `Sessions.kt` 含 `object Channel` / `COOLDOWN_MS`；`AgentEngine.kt` 含 `probeEndpoint(cfg.baseUrl`；`MainActivity.kt` 含 `探测通道` |
+
+## R-30 构建链不能依赖 zip（0.10.7）
+
+**真机日志（0.10.6）**
+```
+app/.aifactory-build.sh: line 11: zip: command not found
+/data/.../app/build/res.zip: error: I/O error.
+error: failed parsing overlays.
+apt-get install -y zip  ->  E: Unable to locate package zip
+```
+**根因**：0.10.6 把 `link` 的输入改成 `res.zip`，但 Runtime 里没有 `zip`，本地 apt 源也没有该包。aapt2 的 `-R` 也不吃目录（0.10.5 的 `Is a directory`）。
+
+**改法（已落地）**：`compile --dir res -o $B/flat` 后，用
+`FL=$(find $B/flat -name '*.flat' | sort | tr '\n' ' ')`，
+把全部 `.flat` 作为**位置参数**喂给 `link`（等价 base 资源，不需要 overlay、不需要 zip）。
+宿主实测：2 个 flat → `link` 成功产出 1,684 B base.apk。
+
+**闸门**：`need Packager.kt "Runtime 里没有 zip" R-28`、`need Packager.kt "*.flat" R-30`。
+
+## R-31 通道先探测再选，切换后有冷却（0.10.7）
+
+**痛点**：主通道 429 时每轮固定浪费 2+4+6=12 秒、3 次失败，切到备用后下一轮又回主通道撞一遍。
+
+**改法**
+- `Channel`（Sessions.kt）：`preferBackup / until / mainMs / backupMs / COOLDOWN_MS = 10min`；`active()` 判冷却期。
+- 任务开始若不在冷却期且 `autoProbe=true`：`GET {base}/models` 6s 超时探主通道；不可用则探备用，备用可用就直接走备用（`switchToBackup`，冷却 10 分钟）。
+- 主通道连续失败切备用时同样写 10 分钟冷却；备用也失败则 `reset()`，下次重新探测。
+- 模型设置弹层：显示「当前通道」与上次延迟，提供「探测通道」「自动探测：开/关」。
+
+## R-32 界面自动断言靠无障碍服务（0.10.8）
+
+`VerifyA11yService`（`BIND_ACCESSIBILITY_SERVICE`，`canRetrieveWindowContent` + `canPerformGestures`）：
+- `A11y.topPackage()` 取前台包名 → 判定有没有真起来；
+- `A11y.texts()` 递归读可见文字（text + contentDescription）→ CRASH/ANR 关键词、白屏判定；
+- `A11y.swipe()/tap()` 用 `dispatchGesture` 真发一次手势，再看是否仍在前台。
+- 未开启无障碍时一律不给 PASS，只给 `LAUNCHED_UNVERIFIED`（Android 进程隔离，第三方 App 读不到别的进程 logcat/界面）。
+
+## R-33 装完自动接续验证（0.10.8）
+
+`VerifyRunner.waitInstalled()`：安装器弹窗唤起后轮询 90 秒，比对 APK 的 `versionName` 与已装包 + `lastUpdateTime`，装好即自动继续启动/读界面。旧实现是唤起安装器后立刻查 `getPackageInfo`，命中旧版本 → 直接误报 `NOT_INSTALLED`。
+
+## R-34 构建产物进文件中心（0.10.8）
+
+`FileHub.listOutputs()` 列 `files/outputs` 下 apk/aab（按时间倒序），文件中心新增「构建产物」卡：显示体积+时间，APK 带「安装」按钮。此前文件中心只有 SAF 导入文件，产物只能靠终端路径找。
+
+## R-35 验证结论档位
+
+`PASS_UI`（前台是本包 + 读到文字 + 手势后仍在）> `PASS`（adb 截图非空白）> `LAUNCHED_UNVERIFIED`；失败档 `CRASH` / `CRASH_UI` / `BLANK_UI` / `NO_FOREGROUND` / `GESTURE_LEFT` / `NOT_INSTALLED` / `NO_LAUNCHER`。
+
+## R-37 推送用设置里的 Token，不再向用户索要（0.10.9）
+
+**真机现象**：设置页「连接并检查」通过（App 自己拿 Token 调 API），但 Agent 在对话里还要用户给 Token。
+
+**根因**：Token 只存在 App 的 SharedPreferences 里；Agent 执行的是 Runtime 中的 `git push`，那个进程没有凭据助手，也读不到 App 设置。
+
+**改法**：新增 `git_push` 工具 + `GitOps.push()`：
+- 用 `cfg.ghToken` 调 API 建仓（404 时 `POST /user/repos`），本地无 `.git` 时自动 `init/add/commit`；
+- `remote` 只写干净 URL，凭证走一次性 `-c http.https://github.com/.extraheader="Authorization: basic <base64(x-access-token:TOKEN)>"`，Token 不进 URL、不进 `.git/config`；
+- 输出统一 `redact()`：token / base64 头替换成 `***`；
+- 401/403 → 明确提示「去重新生成勾了 repo 的 token」，其余错误给出 rejected / 地址不对等定点提示。
+
+**闸门**：`need GitOps.kt "x-access-token:"`、`"extraheader"`、`need AgentEngine.kt "绝不要再向用户索要 Token"`。
+
+## R-36 文件中心整页可滚动、可删除（0.10.9）
+
+旧实现把「构建产物」卡放在不可滚动的 `Column` 里，产物一多整页超屏，导入列表与删除按钮被挤出可视区 → 表现为"滑不动、点不到删除"。改为**整页一个 `LazyColumn`**（头部固定，卡片/产物/导入文件都是 item），产物行右侧删除按钮 + 二次确认弹窗（`pendingDelete`），删除后刷新列表。
+
+## R-38 探测必须打生成接口（0.10.10）
+
+`GET /models` 只证明网络通，不消耗生成额度；GLM 免费档的 1305 只在 `/chat/completions` 才出现。结果就是"探测：主通道可用 78ms"紧跟三条 429。
+改法：`probeChat(base, model, key)` 真发一次 `max_tokens=1` 的生成请求，只有 2xx 才算可用；429/401/超时一律判不可用。模型设置页的「探测通道」也走这条。
+
+## R-39 429 直接切备用，不再重试三次（0.10.10）
+
+旧逻辑：主通道 429 → 2s/4s/6s 重试 3 次 → 才切备用，一轮固定浪费 12 秒 + 3 次失败，而且下一轮还会回主通道再撞一遍（0.10.7 起有 10 分钟冷却，但首次仍撞满）。
+改法：
+- 配了备用时，**429 或网络失败（-1）立即切备用**，只给一行动作提示，不 sleep；5xx 保留一次 1s 快速重试（服务端可能真抖动）。
+- `backoff` 由 `2*n`（2/4/6）降为 `n`（1/2/3），只有没装备用时才会走到。
+- 冷却期内所有请求直达备用；模型设置页新增「回主通道」手动复位。

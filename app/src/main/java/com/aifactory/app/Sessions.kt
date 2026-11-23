@@ -28,6 +28,43 @@ import java.io.File
 
 internal data class SessionMeta(val id: String, val title: String, val updated: Long)
 
+/** 主/备通道的在线状态：切过去之后有冷却期，不会每轮都先回主通道撞一遍。 */
+internal object Channel {
+    var preferBackup by mutableStateOf(false)
+    var until by mutableStateOf(0L)
+    var mainMs by mutableStateOf(-1)
+    var backupMs by mutableStateOf(-1)
+    var note by mutableStateOf("")
+    /** 主备都失败的熔断：这段时间内不再发请求，避免每条消息白烧 6 秒。 */
+    @Volatile var failStreak = 0
+    @Volatile var deadUntil = 0L
+    const val COOLDOWN_MS = 10 * 60 * 1000L
+
+    fun active(now: Long = System.currentTimeMillis()): Boolean = preferBackup && now < until
+    fun label(): String = if (active()) "备用" else "主通道"
+    fun switchToBackup(reason: String) {
+        preferBackup = true
+        until = System.currentTimeMillis() + COOLDOWN_MS
+        note = reason
+    }
+    fun reset() { preferBackup = false; until = 0L; note = "" }
+
+    fun isDead(now: Long = System.currentTimeMillis()): Boolean = now < deadUntil
+
+    fun markAllDead() {
+        failStreak += 1
+        deadUntil = System.currentTimeMillis() + 45_000L
+        preferBackup = false
+        until = 0L
+note = "主备通道都不可用"
+    }
+
+    fun clearDead() {
+        failStreak = 0
+        deadUntil = 0L
+    }
+}
+
 internal object ChatRunner {
     const val HELLO = "你好，我是 AIFactory。描述你想构建的软件，我们从需求分析和工程规划开始。"
 
@@ -82,7 +119,7 @@ internal object ChatRunner {
                     val arr = JSONArray(legacy(ctx).readText())
                     for (i in 0 until arr.length()) {
                         val o = arr.getJSONObject(i)
-                        messages.add(ChatMessage(o.optString("role", "assistant"), o.optString("text"), o.optString("meta", "")))
+                        messages.add(ChatMessage(o.optString("role", "assistant"), Secrets.scrub(o.optString("text")), o.optString("meta", "")))
                     }
                     legacy(ctx).delete()
                 }
@@ -104,7 +141,7 @@ internal object ChatRunner {
             val arr = JSONArray(f.readText())
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                messages.add(ChatMessage(o.optString("role", "assistant"), o.optString("text"), o.optString("meta", "")))
+                messages.add(ChatMessage(o.optString("role", "assistant"), Secrets.scrub(o.optString("text")), o.optString("meta", "")))
             }
         }
         if (messages.isEmpty()) messages.add(ChatMessage("assistant", HELLO))
@@ -190,15 +227,18 @@ internal object ChatRunner {
                 if (agentMode) {
                     val agent = AgentEngine(ctx)
                     val t0 = System.currentTimeMillis()
-                    val answer = agent.run(fullPrompt, cfg, prior) { ev -> main.post { messages.add(ChatMessage("assistant", ev)) } }
+                    val known = Secrets.knownKeys(cfg)
+                    val answer = agent.run(fullPrompt, cfg, prior) { ev ->
+                        messages.add(ChatMessage("assistant", Secrets.scrub(ev, known)))
+                    }
                     val sec = ((System.currentTimeMillis() - t0) / 100) / 10.0
-                    messages.add(ChatMessage("assistant", answer, "用时 " + sec + "s · " + agent.lastStats))
+                    messages.add(ChatMessage("assistant", Secrets.scrub(answer, known), "用时 " + sec + "s · " + agent.lastStats))
                 } else {
                     val hist = messages.toList()
                     val answer = withContext(Dispatchers.IO) {
                         requestChat(cfg.baseUrl, cfg.model, cfg.apiKey, hist)
                     }
-                    messages.add(ChatMessage("assistant", answer))
+                    messages.add(ChatMessage("assistant", Secrets.scrub(answer, Secrets.knownKeys(cfg))))
                 }
             } catch (e: CancellationException) {
                 messages.add(ChatMessage("assistant", "已停止。"))

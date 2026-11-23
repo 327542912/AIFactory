@@ -40,7 +40,7 @@ class AgentEngine(private val ctx: Context) {
         private val LOOSE_TOOL = Regex("(?:^|\\n)[ \\t]*(?:🔧\\s*)?([a-z][a-z0-9_]{2,})\\s+(\\{[^\\n]*\\})[ \\t]*(?=\\n|$)")
     private val KNOWN_TOOLS = setOf(
         "run_shell", "read_file", "write_file", "replace_in_file", "list_dir", "toolchain_status",
-        "build_apk", "build_aab", "install_apk", "launch_app", "verify_app", "adb", "pipeline_status", "read_log",
+        "build_apk", "build_aab", "install_apk", "launch_app", "verify_app", "adb", "git_push", "pipeline_status", "read_log",
         "download_url", "decompile_apk", "inspect_apk", "fetch_url", "remember"
     )
     private val DANGEROUS = Regex("rm\\s+-[a-zA-Z]*[rR][a-zA-Z]*\\s+(/|~|\\\$HOME|\\\$PREFIX|/data)\\s*(\$|;|&)")
@@ -58,7 +58,13 @@ class AgentEngine(private val ctx: Context) {
     var lastStats: String = ""; private set
 
     private val tools = listOf(
-        ToolDef("verify_app", "真机验证：装 → 启动 →（有 adb 时）抓崩溃栈与截图 → 写 verify.json。构建成功不等于能跑，汇报完成前必须跑它。",
+        ToolDef("git_push", "把这个项目推到 GitHub：用设置页已经配好的 Token 自动建仓/配 remote/推送，Token 不进 URL、不进日志。用户说'发布到仓库/推到 GitHub'时直接用它，绝不要再向用户索要 Token。",
+            mapOf(
+                "project" to "项目名；空=当前项目",
+                "repo" to "owner/repo；空=用设置里的仓库",
+                "branch" to "分支，默认 main"
+            ), emptyList()),
+        ToolDef("verify_app", "真机验证（构建成功后必须立刻调用）：唤起安装器并等你点确认（最多 90 秒自动探测装好）→ 自动启动 → 无障碍在时读界面文字、发一次滑动手势，判定 PASS_UI/CRASH_UI/BLANK_UI/NO_FOREGROUND；有 adb 时再加崩溃栈与截图 → 写 verify.json。不要用 launch_app 代替它。",
             mapOf("project" to "项目名（相对工作区），留空=当前项目"), emptyList()),
         ToolDef("adb", "直接在手机上跑 adb 命令（需先在设置页做无线调试配对）。拿 logcat、screencap、am start、pm list 都靠它。",
             mapOf("command" to "adb 后面的参数，例如 \"shell logcat -d -b crash | tail -40\""), listOf("command")),
@@ -75,7 +81,7 @@ class AgentEngine(private val ctx: Context) {
         ToolDef("build_aab", "产出 Google Play 的 AAB（零 gradle：aapt2 proto link + javac + d8 + bundletool + jarsigner，targetSdk 36）。想要上架包就用它，别自己在终端拼 aapt2——aapt2 的 -R 只能吃 res.zip，喂目录必报 Is a directory。",
             mapOf("project" to "项目名（留空=当前项目）"), emptyList()),
         ToolDef("build_apk", "构建项目：有 app/src/main 布局时走本地工具链（aapt2+javac+D8+签名，零网络），并自动自检；否则走 Gradle。返回 APK 路径或错误日志。",
-            mapOf("project" to "项目目录（相对工作区）", "release" to "true=签名的 release，false=debug（默认）"), listOf("project")),
+            mapOf("project" to "项目目录（相对工作区）", "release" to "留空即可；产物统一用 release.jks 签名，命名 <项目>-<时间戳>.apk，不再谎称 debug"), emptyList()),
         ToolDef("install_apk", "唤起系统安装器安装 APK（需要用户在弹窗中确认）。",
             mapOf("path" to "APK 路径（build_apk 返回的路径）"), listOf("path")),
         ToolDef("launch_app", "装完后真正启动应用（用 PackageManager 调起 LAUNCHER），用来验证它能不能起来。注意：Android 不允许第三方 App 读别的进程 logcat，所以这里只能确认\"能启动、没立即崩\"，界面是否正常要用户看或截图。",
@@ -121,6 +127,8 @@ class AgentEngine(private val ctx: Context) {
         appendLine("交付闸门（硬规则，不可绕过）：build_apk 成功 ≠ 应用可用。没有调用 launch_app 真正把它启动起来，禁止说「测试通过 / 已运行 / 能正常使用」，只能说「构建成功，尚未验证运行」。装完就调 launch_app；启动失败或用户反馈闪退，先 inspect_apk 看入口 Activity 与权限，再改代码重编。")
         appendLine("零 gradle 手工链的硬限制：不支持 AAR / Gradle 依赖解析。禁止引入 androidx、appcompat、material、kotlin 协程之外的三方库来写 UI——手工 aapt2 link 会因缺 R 符号、styleable、依赖链（core/lifecycle/savedstate…）而失败。需要界面就用 android.app.Activity + 原生 View（TextView/Button/LinearLayout）或自绘 Canvas；需要兼容库能力时用 framework 自带 API 替代。已经解压的 .aar 别继续喂 aapt2，那必然报 flat/overlay 错误。")
         appendLine("只有用户明确要求安装时才调用 install_apk。不确定环境时先调用 toolchain_status；缺少工具链时告诉用户到 设置 → Runtime 安装，不要自行下载未知来源的二进制。")
+        appendLine("发布到 GitHub：直接调 git_push（它用设置里已配好的 Token，自动建仓、配 remote、推送，Token 不会出现在命令/日志里）。绝对不要在 run_shell 里手拼带 token 的 URL，也不要向用户索要 Token——用户已经在设置页填过。只有 git_push 明确返回 401/403 时，才让用户去重新生成一枚勾了 repo 的 token。")
+        appendLine("构建成功后必须调 verify_app 走真机验证，不要用 launch_app 代替，也不要在没有 verify.json 结论时宣布完成。")
         appendLine("可以用 apt-get install / pip / npm 安装依赖。不要用 pkg（会改写软件源）。apt 的源是本项目自建仓库，只包含已发布的包；找不到时告诉用户把包名加入 GitHub 工作流的 repo_packages 重新发布。不要手动改 apt 源为官方 Termux 仓库（路径前缀不同，会损坏 Runtime）。")
         appendLine("删除、覆盖大量文件前先向用户说明。回答使用中文，简洁。")
         appendLine()
@@ -168,8 +176,21 @@ class AgentEngine(private val ctx: Context) {
 
     // ---------- 主循环 ----------
 
-    suspend fun run(userText: String, cfg: AppConfig, prior: List<Pair<String, String>> = emptyList(), onEvent: (String) -> Unit): String {
-        suspend fun emit(s: String) = withContext(Dispatchers.Main) { onEvent(s) }
+    suspend fun run(userText: String, cfg: AppConfig, prior: List<Pair<String, String>> = emptyList(), onEvent: (String) -> Unit): String = try {
+        runGuarded(userText, cfg, prior, onEvent)
+    } catch (e: Throwable) {
+        // 关键：主备都挂这类路径上任何一处抛异常，都不许把进程带走（否则就是用户看到的"闪退 + 丢上下文"）
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        val log = crashLog(ctx, "agent-run", e)
+        "执行中断，但不是闪退——异常已被兜住，进程和上下文都在。\n" +
+            e.javaClass.simpleName + ": " + (e.message ?: "") + "\n" +
+            "崩溃日志：" + log + "\n" +
+            "回复「继续」接着跑；关键是换一个能用的 Key（主备同时 429/401 时没有可用的通道）。"
+    }
+
+    private suspend fun runGuarded(userText: String, cfg: AppConfig, prior: List<Pair<String, String>> = emptyList(), onEvent: (String) -> Unit): String {
+        val known = Secrets.knownKeys(cfg)
+        suspend fun emit(s: String) = withContext(Dispatchers.Main) { onEvent(Secrets.scrub(s, known)) }
         // 只继承本会话的最近几条，换主题就新建会话，互不污染
         prior.takeLast(8).forEach { (role, text) ->
             history.put(JSONObject().put("role", if (role == "assistant") "assistant" else "user")
@@ -194,51 +215,76 @@ class AgentEngine(private val ctx: Context) {
                 currentCoroutineContext().ensureActive()
                 compactHistory()
                 requests++; steps = step
-                var resp = withContext(Dispatchers.IO) { callModel(cfg) }
-                // 免费模型常被限流（GLM 的 1305 / 429）：先主通道退避 3 次，仍不行且配了备用通道就切换。
-                // 关键：history 一直在，切通道只是换“谁来回话”，工具链条和已做步骤都不丢。
-                var onBackup = false
-                var throttle = 0
-                fun backoff(n: Int, hint: Int): Int =
-                    if (hint > 0) hint.coerceAtMost(30) else (2 * n).coerceAtMost(20)
-                fun retryable(code: Int) = code == 429 || code == -1 || code in 500..599
-                while (retryable(resp.first)) {
-                    if (!onBackup) {
-                        if (throttle < 3) {
-                            throttle++
-                            val wait = backoff(throttle, lastRetryAfter)
-                            emit((if (resp.first == 429) "模型限流（HTTP 429）" else "网络失败（HTTP " + resp.first + "：" + tailText(resp.second, 120) + "）") + "，" + wait + "s 后自动重试（" + throttle + "/3，主通道）")
-                            delay(wait * 1000L)
-                            resp = withContext(Dispatchers.IO) { callModel(cfg) }
-                        } else if (cfg.hasBackup) {
-                            onBackup = true; throttle = 0
-                            emit("主通道连续失败（429/网络/5xx），已切到备用通道：" + cfg.backupModel + "（步骤与上下文不丢）")
-                            resp = withContext(Dispatchers.IO) {
-                                callModel(cfg, cfg.backupBaseUrl, cfg.backupModel, cfg.backupApiKey)
-                            }
-                        } else break
-                    } else {
-                        if (throttle < 3) {
-                            throttle++
-                            val wait = backoff(throttle, lastRetryAfter)
-                            emit("备用通道也失败（HTTP " + resp.first + "），" + wait + "s 后重试（" + throttle + "/3）")
-                            delay(wait * 1000L)
-                            resp = withContext(Dispatchers.IO) {
-                                callModel(cfg, cfg.backupBaseUrl, cfg.backupModel, cfg.backupApiKey)
-                            }
-                        } else break
+                // 熔断：主备刚连续失败过，45 秒内不再发请求，也不做空转重试
+                // 不再用熔断挡用户：每轮最多「主 1 次 + 备 4 次」，有界，不会死循环；失败就交还控制权
+
+                // 通道池：N 个端点按调用次数分片，失败端点冷却 2~8 轮；单轮最多试 MAX_TRY_PER_TURN 个，绝不死循环
+                Pool.sync(cfg)
+                var resp: Pair<Int, String> = 0 to ""
+                var usedLabel = ""
+                var tries = 0
+                while (true) {
+                    val slot = Pool.pick(force = tries == 0)
+                    if (slot == null) {
+                        val q = Pool.quarantined()
+                        val soft = Pool.slots.filter { !it.quarantined }
+                        if (soft.isEmpty() && q.isNotEmpty()) {
+                            // 全部隔离：一次请求都不发，直接说清楚哪条要怎么修，不浪费你的时间
+                            return "没有可用通道：所有端点都被隔离了（欠费 / Key 无效 / 模型不存在，这类不会自己好）。\n" +
+                                q.joinToString("\n") { "⛔ " + it.label + "：" + it.qReason } +
+                                "\n\n我这一轮没有向它们发任何请求，所以 0 秒浪费。\n" +
+                                "修好一个之后，在设置页点「探测通道」——探测成功会自动解除隔离，并立刻回到候选池。\n" +
+                                "上下文没丢，回复「继续」即可接着跑。"
+                        }
+                        val soon = soft.minByOrNull { it.coolUntil }
+                        val left = if (soon == null) 0 else Pool.coolLeft(soon)
+                        return "所有通道都在冷却（" + Pool.slots.size + " 个）：" + Pool.summary() +
+                            "\n最快 " + left + " 轮后解冻。这不是崩溃，也没有丢上下文——" +
+                            "回「继续」我会立刻再试一轮；或者加一个通道/换 Key（设置页「通道池」）。"
                     }
+                    Pool.turn++
+                    Pool.begin(slot)
+                    if (usedLabel.isNotEmpty() && usedLabel != slot.label) emit("换通道 → " + slot.label + "（第 " + Pool.turn + " 轮）")
+                    usedLabel = slot.label
+                    val t0 = System.currentTimeMillis()
+                    resp = withContext(Dispatchers.IO) { callModel(cfg, slot.base, slot.model, slot.key) }
+                    val ms = (System.currentTimeMillis() - t0).toInt()
+                    if (resp.first in 200..299) {
+                        Pool.success(slot, ms)
+                        Channel.clearDead()
+                        break
+                    }
+                    val knownGood = slot.ok > 0 && slot.calls > slot.ok
+                    val coolN = Pool.cool(slot, resp.first, resp.second)
+                    val hard = slot.quarantined
+                    tries++
+                    emit(slot.label + " 失败（HTTP " + resp.first + "）：" +
+                        (if (hard) "已隔离——" + slot.qReason + "，之后不再拿它当候选，直到你手动探测成功"
+                         else if (knownGood) "1 秒后原地重试它（不换端点：能用的慢端点比换到坏端点划算）"
+                         else "冷却 " + coolN + " 轮（限流/抖动，会自动恢复）") +
+                        "；池内还有 " + Pool.ready().size + " 个可用端点（已试 " + tries + "/" + Pool.MAX_TRY_PER_TURN + "）")
+                    if (tries >= Pool.MAX_TRY_PER_TURN) break
+                    // 只有 400（请求体本身不合法）换端点也没意义；401/402/403/404/429 都是"这个端点不行"，继续换下一个
+                    if (resp.first == 400 && tries >= 2) break
+                    // 429 立即换端点，不等待（等待只会把 10 分钟窗口的额度继续耗着往下撞）
+                    if (resp.first != 429) delay(1000L)
                 }
-                if (onBackup && resp.first in 200..299) emit("（本轮后续请求使用备用通道 " + cfg.backupModel + "）")
                 if (resp.first == 400 && nativeTools && resp.second.contains("tool", ignoreCase = true)) {
                     nativeTools = false
                     emit("服务端不支持原生工具调用，已切换到文本协议。")
                     resp = withContext(Dispatchers.IO) { callModel(cfg) }
                 }
-                if (resp.first !in 200..299) return "模型 API 错误（HTTP " + resp.first + "）：" + tailText(resp.second, 800) +
-                    "\n已做了 " + (steps - 1) + " 步、工具调用 " + toolCalls + " 次；上下文没丢——" +
-                    "回复「继续」我会从断点接着跑（不会重头再来）。" +
-                    (if (cfg.hasBackup) "" else "\n建议在设置页配一个「备用模型通道」：主通道限流时自动切换，长任务就不会半路掉线。")
+                if (resp.first !in 200..299) {
+                    val hard = Pool.isHardFail(resp.first)
+                    val tail = tailText(resp.second, 500)
+                    return "所有可用端点都试过了，最后一个 " + usedLabel + " 返回 HTTP " + resp.first + "：" + tail +
+                        "\n\n池状态：" + Pool.summary() +
+                        "\n已做了 " + (steps - 1) + " 步、工具调用 " + toolCalls + " 次；上下文没丢。" +
+                        if (hard) "\n\n这是端点自己拒绝（401 Key 无效 / 402 余额不足 / 403 无权限），回「继续」只会重复失败。" +
+                            "去设置页「通道池」把这一行的 Key 换掉，或充值/换一个免费端点（如硅基、本地 llama.cpp）；" +
+                            "也确认「主通道」的 Key 不是同一个已欠费的 Key。"
+                        else "\n\n这是限流/网络类，回「继续」我会立刻在池里挑下一个还能用的端点接着跑。"
+                }
 
                 val msg = try {
                     JSONObject(resp.second).getJSONArray("choices").getJSONObject(0).getJSONObject("message")
@@ -736,6 +782,18 @@ class AgentEngine(private val ctx: Context) {
                     }
                 }
             }
+            "git_push" -> {
+                val projArg = a.optString("project").ifBlank { WorkState.currentProject ?: "" }
+                if (projArg.isBlank()) "没有指定项目，也没有当前项目。" else {
+                    val dir = resolve(projArg)
+                    if (!dir.isDirectory) "项目不存在：" + dir.path
+                    else {
+                        val cfg = AppConfig(ctx)
+                        val r = GitOps.push(ctx, rt, cfg, dir, a.optString("repo"), a.optString("branch")) { line -> SessionHub.notify(line) }
+                        if (r.ok) "【已推送】\n" + r.text else "【推送失败】\n" + r.text
+                    }
+                }
+            }
             "verify_app" -> {
                 val projArg = a.optString("project").ifBlank { WorkState.currentProject ?: "" }
                 if (projArg.isBlank()) "没有指定项目也没有当前项目，无法验证。" else {
@@ -769,5 +827,64 @@ class AgentEngine(private val ctx: Context) {
         throw e
     } catch (e: Exception) {
         "工具执行出错：${e.message}"
+    }
+}
+
+/** 探活一个 OpenAI 兼容端点：真正发一次 max_tokens=1 的生成请求。
+ *  /models 只验证网络通不通，GLM 的 1305 限流只有生成时才出现，所以必须打 /chat/completions。 */
+internal fun probeChat(baseUrl: String, model: String, key: String): Pair<Boolean, Int> {
+    if (baseUrl.isBlank()) return false to -1
+    var conn: java.net.HttpURLConnection? = null
+    val t0 = System.currentTimeMillis()
+    return try {
+        conn = (java.net.URL(baseUrl.trimEnd('/') + "/chat/completions").openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"; connectTimeout = 8000; readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) setRequestProperty("Authorization", "Bearer " + key)
+            val body = "{\"model\":\"" + model + "\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1,\"stream\":false}"
+            outputStream.use { it.write(body.toByteArray()) }
+        }
+        val code = conn.responseCode
+        // 只有真出结果才算可用；429（1305 限流）/401/超时都算不可用
+        (code in 200..299) to (System.currentTimeMillis() - t0).toInt()
+    } catch (e: Exception) {
+        false to -1
+    } finally {
+        conn?.disconnect()
+    }
+}
+
+/** 把崩溃写到 home/.aifactory/logs/crash-<ts>.txt，返回文件路径（给聊天里展示用）。 */
+internal fun crashLog(ctx: android.content.Context, tag: String, e: Throwable): String = runCatching {
+    val dir = File(RuntimePaths.home(ctx), ".aifactory/logs")
+    dir.mkdirs()
+    val f = File(dir, "crash-" + tag + "-" + System.currentTimeMillis() + ".txt")
+    f.writeText(e.toString() + "\n\n" + e.stackTrace.joinToString("\n"))
+    f.absolutePath
+}.getOrElse { "（日志写入失败：" + it.message + "）" }
+
+/** 诊断用探活：返回 (HTTP 码, 延迟ms, 响应体尾部)。跟 probeChat 的区别是不把 400/401/402 笼统写成"不可用"，而是把码和响应体给用户看。 */
+
+internal fun probeRaw(baseUrl: String, model: String, key: String): Triple<Int, Int, String> {
+    if (baseUrl.isBlank() || !baseUrl.startsWith("http")) return Triple(0, 0, "Base URL 无效")
+    var conn: java.net.HttpURLConnection? = null
+    val t0 = System.currentTimeMillis()
+    return try {
+        conn = (java.net.URL(baseUrl.trimEnd('/') + "/chat/completions").openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "POST"; connectTimeout = 8000; readTimeout = 20000; doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) setRequestProperty("Authorization", "Bearer " + key)
+            val body = "{\"model\":\"" + model + "\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":1,\"stream\":false}"
+            outputStream.use { it.write(body.toByteArray()) }
+        }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val txt = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        Triple(code, (System.currentTimeMillis() - t0).toInt(), tailText(txt, 200))
+    } catch (e: Exception) {
+        Triple(-1, -1, e.message ?: "请求失败")
+    } finally {
+        conn?.disconnect()
     }
 }
