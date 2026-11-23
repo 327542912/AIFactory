@@ -193,6 +193,10 @@ private fun ChatPage(
     var baseUrl by remember { mutableStateOf(cfg.baseUrl) }
     var model by remember { mutableStateOf(cfg.model) }
     var apiKey by remember { mutableStateOf(cfg.apiKey) }
+    var bkBase by remember { mutableStateOf(cfg.backupBaseUrl) }
+    var bkModel by remember { mutableStateOf(cfg.backupModel) }
+    var bkKey by remember { mutableStateOf(cfg.backupApiKey) }
+    var showBkKey by remember { mutableStateOf(false) }
     var maxSteps by remember { mutableStateOf(cfg.maxSteps.toString()) }
     var showSettings by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
@@ -275,6 +279,42 @@ private fun ChatPage(
                     OutlinedTextField(maxSteps, { maxSteps = it; it.toIntOrNull()?.let { n -> cfg.maxSteps = n } }, label = { Text("每条消息最大工具调用次数（默认 200）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(apiKey, { apiKey = it; cfg.apiKey = it }, label = { Text("API Key（保存在应用私有存储）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     Text("兼容 OpenAI /chat/completions 接口；本地 llama.cpp server 可填 http://127.0.0.1:8080/v1。Agent 模式需要模型支持工具调用（不支持时自动退回文本协议）。", color = Muted, fontSize = 11.sp)
+
+                    Text("———— 主通道 ↑ / 备用通道 ↓ ————", color = Muted, fontSize = 10.sp)
+                    Text(
+                        if (cfg.hasBackup) "备用通道（主通道 429 自动切换）· 已配 " + cfg.backupModel
+                        else "备用通道（主通道 429 自动切换）· 未配，长任务撞限流会中断",
+                        fontWeight = FontWeight.SemiBold, fontSize = 12.sp,
+                        color = if (cfg.hasBackup) Accent else Muted
+                    )
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(
+                            Triple("硅基 GLM-Z1-9B", "https://api.siliconflow.cn/v1", "zhipuai/GLM-Z1-9B-0414"),
+                            Triple("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
+                            Triple("本地 llama.cpp", "http://127.0.0.1:8080/v1", "local"),
+                            Triple("清空", "", "")
+                        ).forEach { (label, u, m) ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (label == "清空") MaterialTheme.colorScheme.surface else Accent.copy(alpha = .12f),
+                                modifier = Modifier.clickable {
+                                    bkBase = u; cfg.backupBaseUrl = u
+                                    bkModel = m; cfg.backupModel = m
+                                    if (label == "本地 llama.cpp" || label == "清空") { bkKey = ""; cfg.backupApiKey = "" }
+                                }
+                            ) { Text(label, Modifier.padding(horizontal = 9.dp, vertical = 7.dp), fontSize = 11.sp, color = if (label == "清空") Muted else Accent, maxLines = 1, softWrap = false) }
+                        }
+                    }
+                    OutlinedTextField(bkBase, { bkBase = it; cfg.backupBaseUrl = it }, label = { Text("备用 API Base URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(bkModel, { bkModel = it; cfg.backupModel = it }, label = { Text("备用模型名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        bkKey, { bkKey = it; cfg.backupApiKey = it },
+                        label = { Text("备用 API Key（主/备可以是不同厂商）") },
+                        singleLine = true,
+                        visualTransformation = if (showBkKey) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = { TextButton(onClick = { showBkKey = !showBkKey }) { Text(if (showBkKey) "隐藏" else "显示", fontSize = 11.sp) } },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
@@ -558,46 +598,12 @@ private fun AdbCard() {
 
 
 @Composable
-private fun BackupCard() {
-    val ctx = LocalContext.current
-    val cfg = remember { AppConfig(ctx.applicationContext) }
-    var base by remember { mutableStateOf(cfg.backupBaseUrl) }
-    var model by remember { mutableStateOf(cfg.backupModel) }
-    var key by remember { mutableStateOf(cfg.backupApiKey) }
-    var showKey by remember { mutableStateOf(false) }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("备用模型通道（主通道 429 自动切换）", fontWeight = FontWeight.SemiBold)
-            Text(
-                if (cfg.hasBackup) "已配置：" + cfg.backupModel + " @ " + cfg.backupBaseUrl
-                else "未配置。不配也能用，只是长任务撞上主模型限流时会中断；配了就会自动换人接着跑，步骤不丢。",
-                fontSize = 11.sp, color = Muted
-            )
-            OutlinedTextField(base, { base = it; cfg.backupBaseUrl = it }, label = { Text("备用 API 地址（例 https://api.siliconflow.cn/v1）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(model, { model = it; cfg.backupModel = it }, label = { Text("备用模型名（例 zhipuai/GLM-Z1-9B）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(
-                key, { key = it; cfg.backupApiKey = it },
-                label = { Text("备用 API Key") },
-                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示") } },
-                singleLine = true, modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                "也可以填本地 llama.cpp：地址 http://127.0.0.1:8080/v1，模型名随便填（如 local），Key 留空。断网时它照样能接活。",
-                fontSize = 11.sp, color = Muted
-            )
-        }
-    }
-}
-
-@Composable
 private fun SettingsPage() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("AIFactory ${BuildConfig.VERSION_NAME} · 独立 Runtime · Android AI Development Workspace", color = Muted)
         GuideCard()
         GitHubCard()
-        BackupCard()
         AdbCard()
         RuntimeSetupCard()
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
